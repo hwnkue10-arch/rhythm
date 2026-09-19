@@ -1,0 +1,28 @@
+{
+  "name": "rhythm-game-server",
+  "version": "1.0.0",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "build": "tsc -p .",
+    "start": "node dist/index.js",
+    "dev": "ts-node src/index.ts"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "ws": "^8.17.0",
+    "multer": "^1.4.5-lts.1",
+    "uuid": "^9.0.1",
+    "ffmpeg-static": "^5.2.0",
+    "youtube-dl-exec": "^3.0.10"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.4",
+    "ts-node": "^10.9.2",
+    "@types/express": "^4.17.21",
+    "@types/ws": "^8.5.10",
+    "@types/multer": "^1.4.11",
+    "@types/uuid": "^9.0.8",
+    "@types/node": "^20.14.9"
+  }
+}
