@@ -3,11 +3,13 @@ import { themeRegistry } from "./themes/ThemeRegistry.js";
 
 const BASE_SPEED = 0.36; // 초당 정규화 이동 속도 (반응성 향상)
 const SHIFT_MULTIPLIER = 1.55;
-const DASH_SPEED = 1.6; // 대시 발동 시 속도
-const MAX_DASH_TIME = 0.28; // 1회 최대 대시 지속 시간 한계치
-const DASH_COOLDOWN = 0.7; // 대시 쿨타임 0.7초
+// 대시 물리 설정
+const DASH_ACCEL = 13.0;      // 대시 가속도: 짧게 탭하면 초기속도(~0)에서 조금만 올라감
+const DASH_MAX_SPEED = 2.2;  // 꾹 누를 때 도달하는 최대 대시 속도
+const DASH_MAX_DIST = 0.25;  // 한 번 대시의 최대 이동 거리 (화면 40% 기준)
+const DASH_COOLDOWN = 0.1;  // 대시 쿨타임 0.15초
 const PLAYER_RADIUS = 0.011; // 캐릭터 크기
-const DEATH_FADE_SEC = 0.7; // 0.7초 동안 다운 연출
+const DEATH_FADE_SEC = 0.7;  // 0.7초 동안 다운 연출
 const TRAIL_LIFETIME = 0.32;
 const REVIVE_WINDOW_SEC = 4.0; // 부활 제한 시간 4초
 const REVIVE_INVULN_SEC = 1.8; // 부활 직후 1.8초 무적
@@ -25,7 +27,10 @@ export class Game {
     this.dashStartTime = 0;
     this.dashCooldownUntil = 0;
     this.dashDir = { x: 0, y: 0 };
+    this.dashCurrentSpeed = 0;  // 가속도 기반 현재 대시 속도
+    this.dashDistTraveled = 0;  // 이번 대시에서 이동한 총 거리
     this.localInvulnerableUntil = 0;
+    this._facing = -Math.PI / 2; // 마지막으로 바라본 방향 (대시에 사용)
 
     // 피격 FX (스크린 셰이크 & 붉은 플래시 비넷)
     this.damageFlashTimer = 0;
@@ -61,13 +66,23 @@ export class Game {
     if (e.code === "Space") {
       const now = performance.now() / 1000;
       if (!this.keys.has("Space") && now >= this.dashCooldownUntil && !this.isDashing) {
-        const dir = this._inputDirection();
         const me = this.roomState?.players[this.net.playerId];
-        if (me && !me.dead && (dir.x !== 0 || dir.y !== 0)) {
+        if (me && !me.dead) {
+          // 이동 방향이 있으면 그 방향, 없으면 마지막으로 바라본 방향(facing)으로 대시
+          const inputDir = this._inputDirection();
+          let dir;
+          if (inputDir.x !== 0 || inputDir.y !== 0) {
+            dir = inputDir;
+          } else {
+            // facing 각도를 방향 벡터로 변환 (facing은 플레이어 머리 방향 각도)
+            const facingAngle = this._facing - Math.PI / 2; // _drawPlayer rotate 보정
+            dir = { x: Math.cos(facingAngle), y: Math.sin(facingAngle) };
+          }
           this.isDashing = true;
-          this.dashStartTime = now;
+          this.dashCurrentSpeed = 0;   // 속도 0에서 시작 (짧은 탭 = 미세 이동)
+          this.dashDistTraveled = 0;   // 누적 거리 초기화
           this.dashDir = dir;
-          this.localInvulnerableUntil = now + MAX_DASH_TIME; // 대시 지속 중 무적
+          this.localInvulnerableUntil = now + 0.3; // 대시 지속 중 무적
           this._spawnDashParticles(me, dir);
         }
       }
@@ -109,9 +124,8 @@ export class Game {
   }
 
   triggerHitFX() {
-    this.damageFlashTimer = 0.35; // 0.35초간 붉은 비넷 플래시
-    this.screenShakeTimer = 0.3; // 0.3초간 화면 흔들림
-    this.shakeIntensity = 18; // 셰이크 강도
+    // 화면 흔들림(screenShake) 및 붉은 비넷 플래시 효과 제거 - 깔끔한 UI 유지
+    // (damageFlashTimer, screenShakeTimer 미사용)
   }
 
   _inputDirection() {
@@ -163,7 +177,7 @@ export class Game {
     clearTimeout(this._audioStopTimer);
     clearTimeout(this._audioStartTimer);
     this._audioStartTimer = setTimeout(() => {
-      this.audioEl.play().catch(() => {});
+      this.audioEl.play().catch(() => { });
     }, Math.max(0, delay));
 
     this._audioStopTimer = setTimeout(() => {
@@ -211,12 +225,15 @@ export class Game {
     if (me && !me.dead) {
       // 1. 이동 및 대시 처리
       if (this.isDashing) {
-        // 최대 대시 시간 한계치 체크
-        if (now - this.dashStartTime >= MAX_DASH_TIME) {
+        // 가속도 방식: 누르는 동안 속도 증가, 최대 거리 초과 or 키 떼면 종료
+        this.dashCurrentSpeed = Math.min(DASH_MAX_SPEED, this.dashCurrentSpeed + DASH_ACCEL * dt);
+        const step = this.dashCurrentSpeed * dt;
+        me.x += this.dashDir.x * step;
+        me.y += this.dashDir.y * step;
+        this.dashDistTraveled += step;
+        // 최대 이동 거리 도달 시 자동 종료
+        if (this.dashDistTraveled >= DASH_MAX_DIST) {
           this._stopDash();
-        } else {
-          me.x += this.dashDir.x * DASH_SPEED * dt;
-          me.y += this.dashDir.y * DASH_SPEED * dt;
         }
       } else {
         const dir = this._inputDirection();
@@ -300,7 +317,11 @@ export class Game {
       const anim = this._getAnim(p.id);
       if (anim.prevX !== null) {
         const dx = p.x - anim.prevX, dy = p.y - anim.prevY;
-        if (Math.hypot(dx, dy) > 0.0008) anim.facing = Math.atan2(dy, dx);
+        if (Math.hypot(dx, dy) > 0.0008) {
+          anim.facing = Math.atan2(dy, dx);
+          // 내 캐릭터의 facing을 대시용으로도 추적
+          if (p.id === this.net.playerId) this._facing = anim.facing;
+        }
       }
       anim.prevX = p.x; anim.prevY = p.y;
 

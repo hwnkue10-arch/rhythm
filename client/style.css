@@ -51,7 +51,7 @@ body {
   width: 420px;
   backdrop-filter: blur(12px);
 }
-.panel.wide { width: 680px; }
+.panel.wide { width: 860px; max-width: 96vw; }
 
 .panel h1, .panel h2 {
   margin-top: 0;
@@ -126,7 +126,7 @@ button.secondary:hover:not(:disabled) {
 }
 
 .row { display: flex; gap: 10px; align-items: center; }
-.row button { width: auto; margin-top: 0; }
+.row button { width: auto; margin-top: 0; white-space: nowrap; } /* 'mp3 업로드' 등 한 줄 유지 */
 
 .error {
   color: var(--danger);
@@ -158,6 +158,9 @@ button.secondary:hover:not(:disabled) {
   margin: 0;
   padding: 4px 10px;
   font-size: 11px;
+  white-space: nowrap;  /* '방장 위임' 등 버튼 텍스트 한 줄 유지 */
+  width: auto;
+  min-width: fit-content;
 }
 
 /* 노래 슬롯 카드 */
@@ -339,10 +342,10 @@ button.secondary:hover:not(:disabled) {
   animation: heartPulse 1.8s infinite ease-in-out;
 }
 .heart-icon.lost {
-  color: #262938;
-  filter: drop-shadow(0 0 2px rgba(0, 0, 0, 0.8));
-  transform: scale(0.8) rotate(-12deg);
-  animation: heartShatter 0.45s ease-out;
+  color: #4a4e62;
+  filter: none;
+  transform: scale(0.85);
+  opacity: 0.5;
 }
 .revive-wait-text {
   font-size: 13px;

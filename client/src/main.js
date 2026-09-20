@@ -437,9 +437,9 @@ document.getElementById("btn-giveup").addEventListener("click", () => {
 // ---------- 방 나가기 기능 ----------
 function handleLeaveRoom() {
   if (game) game.stopStage();
-  net.leaveRoom();
-  roomState = null;
-  showScreen("landing");
+  net.leaveRoom(); // 서버에 퇴장 요청 전송
+  // 클라이언트 세션을 완전 초기화 후 즉시 새로고침
+  window.location.reload();
 }
 
 const leaveLobbyBtn = document.getElementById("btn-leave-lobby");
@@ -449,9 +449,8 @@ const leaveGameBtn = document.getElementById("btn-leave-game");
 if (leaveGameBtn) leaveGameBtn.addEventListener("click", handleLeaveRoom);
 
 net.on("left_room", () => {
-  if (game) game.stopStage();
-  roomState = null;
-  showScreen("landing");
+  // 서버가 left_room을 응답하면 새로고침 (handleLeaveRoom이 이미 reload하므로 fallback 용도)
+  window.location.reload();
 });
 
 // ---------- 새로고침 세션 자동 복원 (Reconnect) ----------

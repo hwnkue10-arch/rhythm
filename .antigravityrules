@@ -1,0 +1,4 @@
+# CAVEMAN & MINIMAL RESPONSE RULES
+- Keep responses extremely concise. Output ONLY diffs or code changes.
+- Do not rewrite whole files. Only edit specified ranges.
+- Skip conversational intro, structural summaries, and code walkthroughs.

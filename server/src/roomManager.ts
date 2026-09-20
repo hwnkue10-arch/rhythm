@@ -1,6 +1,20 @@
 import { WebSocket } from "ws";
 import { v4 as uuid } from "uuid";
+import fs from "fs";
 import { PlayerState, RoomState, SongSlot, Timeline } from "./types";
+
+/** 디스크 파일을 안전하게 삭제합니다. 존재하지 않거나 오류가 나도 서버는 멈추지 않습니다. */
+async function safeDeleteFile(filePath: string | null | undefined): Promise<void> {
+  if (!filePath) return;
+  try {
+    if (fs.existsSync(filePath)) {
+      await fs.promises.unlink(filePath);
+      console.log(`[파일 정리] 삭제 완료: ${filePath}`);
+    }
+  } catch (err) {
+    console.warn(`[파일 정리] 삭제 실패 (무시됨): ${filePath}`, err);
+  }
+}
 
 const REVIVE_WINDOW_MS = 4000;
 const REVIVE_DOWN_TIME_MS = 700; // 사망 직후 0.7초 동안은 쓰러짐 상태로 부활 불가 (겹침 무적 방지)
@@ -95,8 +109,10 @@ export class RoomManager {
     if (Object.keys(runtime.state.players).length >= 4) return { error: "방 인원이 가득 찼습니다." };
 
     const playerId = uuid();
-    const colorIndex = Object.keys(runtime.state.players).length;
-    const player = this.makePlayer(playerId, nickname, colorIndex);
+    // 이미 사용 중인 색상을 제외하고 남은 인덱스 중 가장 빠른 것을 배정 (퇴장 후 재입장 시 색상 중복 방지)
+    const usedColors = new Set(Object.values(runtime.state.players).map((p) => p.color));
+    const colorIndex = PLAYER_COLORS.findIndex((c) => !usedColors.has(c));
+    const player = this.makePlayer(playerId, nickname, colorIndex >= 0 ? colorIndex : 0);
     runtime.state.players[playerId] = player;
     runtime.sockets.set(playerId, socket);
     return { room: runtime.state, playerId };
@@ -161,6 +177,12 @@ export class RoomManager {
     if (!runtime || runtime.state.hostId !== playerId) return;
     if (runtime.state.phase !== "lobby") return;
     const existing = runtime.state.songs[slot - 1];
+
+    // 새 파일로 교체 시 이전 커스텀 파일 즉시 삭제
+    if (song.filePath && existing.filePath && existing.filePath !== song.filePath) {
+      safeDeleteFile(existing.filePath);
+    }
+
     runtime.state.songs[slot - 1] = { ...existing, ...song, slot };
     this.broadcastRoomState(roomId);
   }
@@ -418,7 +440,14 @@ export class RoomManager {
     if (runtime.failCheckTimer) clearTimeout(runtime.failCheckTimer);
     for (const t of runtime.disconnectTimers.values()) clearTimeout(t);
     runtime.disconnectTimers.clear();
+
+    // 방 삭제 시 모든 스테이지 슬롯의 오디오 파일 정리
+    for (const song of runtime.state.songs) {
+      safeDeleteFile(song.filePath);
+    }
+
     this.rooms.delete(roomId);
+    console.log(`[방 정리] 방 ${roomId} 삭제 및 파일 정리 완료`);
   }
 
   handleDisconnect(roomId: string, playerId: string, onRemoved: () => void) {

@@ -13,6 +13,34 @@ const PORT = process.env.PORT ? Number(process.env.PORT) : 8080;
 const UPLOAD_DIR = path.join(__dirname, "..", "uploads");
 if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 
+/** uploads/ 폴더 내 임시 오디오 파일을 전량 삭제합니다 (mp3, wav, m4a, webm 등). */
+async function cleanUploadsDir(): Promise<void> {
+  const AUDIO_EXTS = new Set([".mp3", ".wav", ".m4a", ".webm", ".ogg", ".aac"]);
+  try {
+    if (!fs.existsSync(UPLOAD_DIR)) return;
+    const files = await fs.promises.readdir(UPLOAD_DIR);
+    const targets = files.filter((f) => AUDIO_EXTS.has(path.extname(f).toLowerCase()));
+    await Promise.all(
+      targets.map(async (f) => {
+        const fullPath = path.join(UPLOAD_DIR, f);
+        try {
+          await fs.promises.unlink(fullPath);
+          console.log(`[uploads 정리] 삭제: ${f}`);
+        } catch (err) {
+          console.warn(`[uploads 정리] 삭제 실패 (무시됨): ${f}`, err);
+        }
+      })
+    );
+    if (targets.length > 0) {
+      console.log(`[uploads 정리] 총 ${targets.length}개 파일 삭제 완료`);
+    } else {
+      console.log("[uploads 정리] 삭제할 파일 없음");
+    }
+  } catch (err) {
+    console.warn("[uploads 정리] 폴더 읽기 실패 (무시됨):", err);
+  }
+}
+
 const app = express();
 app.use(express.json());
 app.use("/uploads", express.static(UPLOAD_DIR));
@@ -240,6 +268,19 @@ wss.on("connection", (socket: WebSocket) => {
   });
 });
 
-server.listen(PORT, '0.0.0.0', () => {
+server.listen(PORT, '0.0.0.0', async () => {
+  // 서버 시작 시: 이전 세션의 잔재 오디오 파일 초기화
+  await cleanUploadsDir();
   console.log(`리듬 게임 서버가 http://0.0.0.0:${PORT} 에서 실행 중입니다. (외부 접속 허용)`);
 });
+
+/** 서버 종료 시 uploads/ 폴더 임시 파일 전량 삭제 후 프로세스 종료 */
+async function gracefulShutdown(signal: string) {
+  console.log(`\n[${signal}] 서버 종료 실행 중... uploads/ 폴더 정리`);
+  await cleanUploadsDir();
+  console.log("[종료] 정리 완료. 서버를 종료합니다.");
+  process.exit(0);
+}
+
+process.on("SIGINT", () => gracefulShutdown("SIGINT"));
+process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
