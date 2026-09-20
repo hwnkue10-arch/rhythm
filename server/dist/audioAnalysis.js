@@ -220,7 +220,7 @@ function mulberry32(seed) {
  * - hihat (치-치) -> gatling (리듬 틱 연속 탄환)
  * - drop (콰광!) -> wall_crush (거대 압살 벽)
  */
-function makeInstrumentEvent(onset, stage, rand) {
+function makeInstrumentEvent(onset, stage, rand, melodyIndex) {
     const { t, instrument, energy, band } = onset;
     // 스테이지별 경고 시간 (1스테이지 0.75s, 2스테이지 0.62s, 3스테이지 0.50s)
     const warnDuration = stage === 1 ? 0.75 : stage === 2 ? 0.62 : 0.5;
@@ -231,11 +231,11 @@ function makeInstrumentEvent(onset, stage, rand) {
         y: 0.15 + rand() * 0.7,
     };
     if (instrument === "kick") {
-        // 1. 킥 드럼: 바닥을 쿵! 울리는 충격파 링 (스페이스바 대시로 돌파!)
+        // 1. 킥 드럼: 바닥을 쿵! 울리는 충격파 링 — 느리게 뻗어나가 대응 가능
         type = "shockwave";
-        activeDuration = 0.62;
-        params.radius = 0.55 + energy * 0.18;
-        params.speed = 0.38 + energy * 0.12;
+        activeDuration = 0.85; // 더 길게 → 천천히 팽창
+        params.radius = 0.50 + energy * 0.12; // 반경 소폭 감소
+        params.speed = 0.22 + energy * 0.06; // 속도 ~40% 감소
     }
     else if (instrument === "snare") {
         // 2. 스네어 / 클랩: 착! 소리에 맞춰 화면을 가로지르는 번쩍이는 레이저
@@ -254,22 +254,71 @@ function makeInstrumentEvent(onset, stage, rand) {
         }
     }
     else if (instrument === "melody") {
-        // 3. 멜로디 / 보컬 / 리드 신스: 음표 하나하나마다 탕! 탕! 날아가는 1발 조준 레이저
+        // 3. 멜로디: 8방향 고정 각도에서 화면 가장자리 → 내부로 날아오는 레이저 볼트
         type = "blaster";
-        activeDuration = 0.28;
-        params.angle = rand() * Math.PI * 2;
-        params.speed = 0.95 + energy * 0.2;
-        params.width = 0.016; // 얇고 날렵함
+        activeDuration = 0.30;
+        // 8방향 고정 각도 (0°=우, 45°=우하, 90°=하, 135°=좌하, 180°=좌, 225°=좌상, 270°=상, 315°=우상)
+        const FIXED_ANGLES = [
+            0,
+            Math.PI * 0.25,
+            Math.PI * 0.5,
+            Math.PI * 0.75,
+            Math.PI,
+            Math.PI * 1.25,
+            Math.PI * 1.5,
+            Math.PI * 1.75,
+        ];
+        const dirIdx = melodyIndex.v % FIXED_ANGLES.length;
+        melodyIndex.v++;
+        const fireAngle = FIXED_ANGLES[dirIdx];
+        // 발사 방향의 반대쪽 화면 가장자리에서 발사 (플레이어 쪽으로 날아오는 느낌)
+        // 각도에 따라 발사 원점을 화면 가장자리에 고정
+        const edgePad = 0.04;
+        let ox = 0.5, oy = 0.5;
+        const ax = Math.cos(fireAngle), ay = Math.sin(fireAngle);
+        // 가장자리 중 가장 빨리 벗어나는 쪽
+        if (Math.abs(ax) >= Math.abs(ay)) {
+            ox = ax > 0 ? edgePad : 1 - edgePad;
+            oy = 0.15 + rand() * 0.7;
+        }
+        else {
+            ox = 0.15 + rand() * 0.7;
+            oy = ay > 0 ? edgePad : 1 - edgePad;
+        }
+        params.x = ox;
+        params.y = oy;
+        params.angle = fireAngle;
+        params.speed = 0.90 + energy * 0.15;
+        params.width = 0.018;
     }
     else if (instrument === "hihat") {
-        // 4. 하이햇 / 셰이커: 잘게 쪼개지는 박자에 맞춰 톡-톡-톡 탄환 연사
-        type = "gatling";
-        activeDuration = 0.65;
-        params.angle = rand() * Math.PI * 2;
-        params.speed = 0.68;
-        params.burstCount = stage === 1 ? 3 : stage === 2 ? 4 : 5;
-        params.burstInterval = 0.1;
-        params.width = 0.015;
+        // 4. 하이햇: 화면 한쪽 가장자리에서 뻗어나오는 회전 레이저 빔 (치-치-치 리듬)
+        type = "sweep_laser";
+        activeDuration = 0.55;
+        // 화면 코너 중 랜덤 1개에서 발사
+        const corners = [
+            { x: 0.0, y: 0.0 },
+            { x: 1.0, y: 0.0 },
+            { x: 0.0, y: 1.0 },
+            { x: 1.0, y: 1.0 },
+        ];
+        const corner = corners[Math.floor(rand() * corners.length)];
+        params.x = corner.x;
+        params.y = corner.y;
+        // 코너별 스윕 시작/끝 각도 (화면 안쪽을 훑는 방향)
+        // 우상단 코너라면 180°~270°(좌↔하) 방향을 쓸어야 화면 안으로 들어옴
+        const sweepRanges = {
+            "0,0": { start: 0, speed: Math.PI * 1.4 }, // 좌상: 우~하 방향으로 쓸기
+            "1,0": { start: Math.PI * 0.5, speed: Math.PI * 1.4 }, // 우상: 하~좌 방향으로 쓸기
+            "0,1": { start: -Math.PI * 0.5, speed: Math.PI * 1.4 }, // 좌하: 우~상 방향으로 쓸기
+            "1,1": { start: Math.PI, speed: -Math.PI * 1.4 }, // 우하: 좌~상 방향으로 쓸기
+        };
+        const key = `${corner.x},${corner.y}`;
+        const sweep = sweepRanges[key] ?? { start: 0, speed: Math.PI * 1.2 };
+        params.sweepAngle = sweep.start;
+        params.sweepSpeed = sweep.speed * (0.9 + energy * 0.3); // 에너지 높을수록 빠르게
+        params.sweepLength = 0.55 + energy * 0.15; // 빔 길이
+        params.width = 0.022; // 빔 두께
     }
     else {
         // 5. 드롭 / 클라이맥스: 콰광! 전 대역 폭발 순간 화면 한 면을 쿵 내려찍는 압살 벽
@@ -316,6 +365,7 @@ function buildTimeline(onsets, songId, stage, durationSec) {
     const events = [];
     let lastTime = -1;
     let concurrentCount = 0;
+    const melodyIndex = { v: 0 }; // melody blaster 방향 순환 카운터
     for (const onset of trimmed) {
         if (Math.abs(onset.t - lastTime) < 0.08) {
             // 0.08초 이내 동시 발생 패턴 개수 제한: 1스테이지 1개, 2스테이지 2개, 3스테이지 2~3개
@@ -328,7 +378,7 @@ function buildTimeline(onsets, songId, stage, durationSec) {
             lastTime = onset.t;
             concurrentCount = 1;
         }
-        events.push(makeInstrumentEvent(onset, stage, rand));
+        events.push(makeInstrumentEvent(onset, stage, rand, melodyIndex));
     }
     events.sort((a, b) => a.t - b.t);
     return {

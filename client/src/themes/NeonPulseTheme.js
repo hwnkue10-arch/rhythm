@@ -5,6 +5,13 @@ export class NeonPulseTheme extends BaseTheme {
     super("neon_pulse", "Neon Pulse");
     this.gridOffset = 0;
     this.particles = this._initParticles(32);
+    // 마젠타(#FF007F)와 시안(#00F0FF) 2가지 네온 색상만 사용
+    this.pulsePalettes = [
+      { r: 255, g: 0, b: 127, hex: "#ff007f" },  // 네온 마젠타
+      { r: 0, g: 240, b: 255, hex: "#00f0ff" },  // 일렉트릭 시안
+    ];
+    this.currentPaletteIndex = 0;
+    this.lastBeatIntensity = 0;
   }
 
   _initParticles(count) {
@@ -26,12 +33,22 @@ export class NeonPulseTheme extends BaseTheme {
   }
 
   renderBackground(ctx, W, H, beatIntensity, time) {
-    // 1. 딥 다크 네온 배경 그라디언트 (비트에 맞춰 모든 박자마다 화끈하게 번쩍임)
+    // 비트 온셋 감지 시 다음 멀티컬러로 순환 변경
+    if (beatIntensity > 0.35 && this.lastBeatIntensity <= 0.35) {
+      this.currentPaletteIndex = (this.currentPaletteIndex + 1) % this.pulsePalettes.length;
+    }
+    this.lastBeatIntensity = beatIntensity;
+    const curColor = this.pulsePalettes[this.currentPaletteIndex];
+
+    // 1. 딥 다크 네온 배경 그라디언트 (비트에 맞춰 멀티컬러 네온으로 번쩍임)
     const cx = W / 2;
     const cy = H / 2;
     const basePulse = beatIntensity * 0.45;
     const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, Math.max(W, H) * 0.85);
-    grad.addColorStop(0, `rgba(${30 + basePulse * 120}, ${15 + basePulse * 40}, ${45 + basePulse * 90}, 1)`);
+    grad.addColorStop(
+      0,
+      `rgba(${Math.min(255, 15 + curColor.r * basePulse * 0.8)}, ${Math.min(255, 10 + curColor.g * basePulse * 0.8)}, ${Math.min(255, 20 + curColor.b * basePulse * 0.8)}, 1)`
+    );
     grad.addColorStop(0.55, `rgba(12, 14, 28, 1)`);
     grad.addColorStop(1, "#020205");
     ctx.fillStyle = grad;
@@ -40,7 +57,7 @@ export class NeonPulseTheme extends BaseTheme {
     // 2. 비트 펄스 반응형 네온 바닥 그리드
     ctx.save();
     const gridAlpha = 0.1 + beatIntensity * 0.35;
-    ctx.strokeStyle = `rgba(5, 217, 232, ${gridAlpha})`;
+    ctx.strokeStyle = `rgba(${curColor.r}, ${curColor.g}, ${curColor.b}, ${gridAlpha})`;
     ctx.lineWidth = 1 + beatIntensity * 2.0;
 
     // 수직선
@@ -100,17 +117,18 @@ export class NeonPulseTheme extends BaseTheme {
   renderBloom(ctx, W, H, beatIntensity) {
     if (beatIntensity <= 0.02) return;
 
+    const curColor = this.pulsePalettes[this.currentPaletteIndex];
     ctx.save();
-    // 화면 테두리 강렬한 네온 비네팅 플래시 (지오메트리 대쉬 스타일, 효과 크기 대폭 상향)
+    // 화면 테두리 강렬한 멀티컬러 네온 비네팅 플래시
     const grad = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.28, W / 2, H / 2, Math.max(W, H) * 0.75);
-    grad.addColorStop(0, "rgba(255, 42, 109, 0)");
-    grad.addColorStop(1, `rgba(255, 42, 109, ${Math.min(0.65, beatIntensity * 0.6)})`);
+    grad.addColorStop(0, `rgba(${curColor.r}, ${curColor.g}, ${curColor.b}, 0)`);
+    grad.addColorStop(1, `rgba(${curColor.r}, ${curColor.g}, ${curColor.b}, ${Math.min(0.65, beatIntensity * 0.6)})`);
     ctx.fillStyle = grad;
     ctx.fillRect(0, 0, W, H);
 
     // 상단/하단/좌우 네온 라인 비트 플래시
     ctx.globalCompositeOperation = "screen";
-    ctx.fillStyle = `rgba(5, 217, 232, ${Math.min(0.55, beatIntensity * 0.5)})`;
+    ctx.fillStyle = `rgba(${curColor.r}, ${curColor.g}, ${curColor.b}, ${Math.min(0.55, beatIntensity * 0.5)})`;
     const lineThick = 4 + beatIntensity * 12;
     ctx.fillRect(0, 0, W, lineThick);
     ctx.fillRect(0, H - lineThick, W, lineThick);

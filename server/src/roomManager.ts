@@ -2,12 +2,14 @@ import { WebSocket } from "ws";
 import { v4 as uuid } from "uuid";
 import { PlayerState, RoomState, SongSlot, Timeline } from "./types";
 
-const REVIVE_WINDOW_MS = 3000;
+const REVIVE_WINDOW_MS = 4000;
 const REVIVE_DOWN_TIME_MS = 700; // 사망 직후 0.7초 동안은 쓰러짐 상태로 부활 불가 (겹침 무적 방지)
 const REVIVER_COOLDOWN_MS = 2000; // 아군을 살린 플레이어의 부활 쿨다운
-const INVULNERABLE_MS = 800; // 0.5~1초 범위 내 값
+const INVULNERABLE_MS = 800; // 피격 무적 (0.8초)
+const REVIVE_INVULNERABLE_MS = 1800; // 부활 직후 무적 (1.8초)
 const MAX_LIVES = 3;
 const PLAYER_COLORS = ["#3378DD", "#D85A30", "#0F9E75", "#D4537E"];
+const DISCONNECT_GRACE_MS = 10000; // 일시적 새로고침/재접속 유예 시간 (10초)
 
 interface RoomRuntime {
   state: RoomState;
@@ -16,6 +18,7 @@ interface RoomRuntime {
   stageEndTimer: NodeJS.Timeout | null;
   failCheckTimer: NodeJS.Timeout | null;
   reviverCooldowns: Map<string, number>; // playerId -> cooldownUntil (ms)
+  disconnectTimers: Map<string, NodeJS.Timeout>; // playerId -> timer
 }
 
 function emptySong(slot: 1 | 2 | 3): SongSlot {
@@ -31,8 +34,34 @@ function emptySong(slot: 1 | 2 | 3): SongSlot {
   };
 }
 
+export interface RoomSummary {
+  id: string;
+  hostNickname: string;
+  playerCount: number;
+  maxPlayers: number;
+  phase: string;
+  isPlaying: boolean;
+}
+
 export class RoomManager {
   private rooms = new Map<string, RoomRuntime>();
+
+  getRoomList(): RoomSummary[] {
+    const list: RoomSummary[] = [];
+    for (const [id, runtime] of this.rooms) {
+      const host = runtime.state.players[runtime.state.hostId];
+      const players = Object.values(runtime.state.players);
+      list.push({
+        id,
+        hostNickname: host ? host.nickname : "알 수 없음",
+        playerCount: players.length,
+        maxPlayers: 4,
+        phase: runtime.state.phase,
+        isPlaying: runtime.state.phase !== "lobby",
+      });
+    }
+    return list;
+  }
 
   createRoom(hostSocket: WebSocket, nickname: string): { room: RoomState; playerId: string } {
     const roomId = uuid().slice(0, 6).toUpperCase();
@@ -53,6 +82,7 @@ export class RoomManager {
       stageEndTimer: null,
       failCheckTimer: null,
       reviverCooldowns: new Map(),
+      disconnectTimers: new Map(),
     };
     this.rooms.set(roomId, runtime);
     return { room: state, playerId };
@@ -72,6 +102,24 @@ export class RoomManager {
     return { room: runtime.state, playerId };
   }
 
+  reconnect(roomId: string, playerId: string, socket: WebSocket): { room: RoomState } | { error: string } {
+    const runtime = this.rooms.get(roomId);
+    if (!runtime) return { error: "존재하지 않는 방입니다." };
+    const player = runtime.state.players[playerId];
+    if (!player) return { error: "방에 존재하지 않는 플레이어입니다." };
+
+    // 타이머가 돌고 있다면 취소
+    const timer = runtime.disconnectTimers.get(playerId);
+    if (timer) {
+      clearTimeout(timer);
+      runtime.disconnectTimers.delete(playerId);
+    }
+
+    player.connected = true;
+    runtime.sockets.set(playerId, socket);
+    return { room: runtime.state };
+  }
+
   private makePlayer(id: string, nickname: string, colorIndex: number): PlayerState {
     return {
       id,
@@ -84,6 +132,7 @@ export class RoomManager {
       x: 0.5,
       y: 0.8,
       invulnerableUntil: 0,
+      stats: { hitCount: 0, deathCount: 0, reviveCount: 0 },
     };
   }
 
@@ -166,6 +215,7 @@ export class RoomManager {
       p.dead = false;
       p.diedAt = null;
       p.invulnerableUntil = 0;
+      p.stats = { hitCount: 0, deathCount: 0, reviveCount: 0 };
     }
     const serverStartTime = Date.now() + 1500; // 클라이언트가 준비할 시간 버퍼
     this.broadcast(roomId, {
@@ -207,19 +257,30 @@ export class RoomManager {
     const runtime = this.rooms.get(roomId);
     if (!runtime) return;
     const wasLastStage = runtime.state.stage >= 3;
-    for (const p of Object.values(runtime.state.players)) {
+
+    // 플레이어별 통계 데이터 모음
+    const playerStats: Record<string, { nickname: string; color: string; hitCount: number; deathCount: number; reviveCount: number }> = {};
+    for (const [pid, p] of Object.entries(runtime.state.players)) {
+      playerStats[pid] = {
+        nickname: p.nickname,
+        color: p.color,
+        hitCount: p.stats?.hitCount || 0,
+        deathCount: p.stats?.deathCount || 0,
+        reviveCount: p.stats?.reviveCount || 0,
+      };
       p.lives = MAX_LIVES;
       p.dead = false;
       p.diedAt = null;
     }
+
     if (wasLastStage) {
       runtime.state.phase = "game_clear";
       this.broadcastRoomState(roomId);
-      this.broadcast(roomId, { type: "game_clear" });
+      this.broadcast(roomId, { type: "game_clear", stats: playerStats });
     } else {
       runtime.state.phase = "stage_clear";
       this.broadcastRoomState(roomId);
-      this.broadcast(roomId, { type: "stage_clear", nextStage: runtime.state.stage + 1 });
+      this.broadcast(roomId, { type: "stage_clear", nextStage: runtime.state.stage + 1, stats: playerStats });
     }
   }
 
@@ -231,11 +292,15 @@ export class RoomManager {
     const now = Date.now();
     if (now < p.invulnerableUntil) return; // 무적 시간 중 판정 무시
 
+    if (!p.stats) p.stats = { hitCount: 0, deathCount: 0, reviveCount: 0 };
+    p.stats.hitCount += 1;
+
     p.lives -= 1;
     if (p.lives <= 0) {
       p.lives = 0;
       p.dead = true;
       p.diedAt = now;
+      p.stats.deathCount += 1;
     } else {
       p.invulnerableUntil = now + INVULNERABLE_MS;
     }
@@ -281,13 +346,15 @@ export class RoomManager {
     const dist = Math.sqrt(dx * dx + dy * dy);
     if (dist > 0.06) return false; // 정규화 좌표(0~1) 기준 근접 판정
 
-    // 부활 성공: 살려준 사람에게 2초 쿨다운 부여
+    // 부활 성공: 살려준 사람에게 2초 쿨다운 부여 및 통계 카운트
     runtime.reviverCooldowns.set(reviverId, now + REVIVER_COOLDOWN_MS);
+    if (!reviver.stats) reviver.stats = { hitCount: 0, deathCount: 0, reviveCount: 0 };
+    reviver.stats.reviveCount += 1;
 
     target.dead = false;
     target.lives = 1;
     target.diedAt = null;
-    target.invulnerableUntil = now + INVULNERABLE_MS;
+    target.invulnerableUntil = now + REVIVE_INVULNERABLE_MS;
 
     // 겹쳐서 또 바로 맞거나 비비는 것을 막기 위해 살짝 바깥으로 분리
     const pushAngle = dist > 0.001 ? Math.atan2(dy, dx) : Math.random() * Math.PI * 2;
@@ -301,6 +368,7 @@ export class RoomManager {
       lives: 1,
       x: target.x,
       y: target.y,
+      invulnerableUntil: target.invulnerableUntil,
     });
     return true;
   }
@@ -343,17 +411,74 @@ export class RoomManager {
     this.beginStage(roomId, runtime.state.stage + 1, timeline, onStageEnd);
   }
 
+  deleteRoom(roomId: string) {
+    const runtime = this.rooms.get(roomId);
+    if (!runtime) return;
+    if (runtime.stageEndTimer) clearTimeout(runtime.stageEndTimer);
+    if (runtime.failCheckTimer) clearTimeout(runtime.failCheckTimer);
+    for (const t of runtime.disconnectTimers.values()) clearTimeout(t);
+    runtime.disconnectTimers.clear();
+    this.rooms.delete(roomId);
+  }
+
+  handleDisconnect(roomId: string, playerId: string, onRemoved: () => void) {
+    const runtime = this.rooms.get(roomId);
+    if (!runtime) return;
+    const player = runtime.state.players[playerId];
+    if (!player) return;
+
+    player.connected = false;
+    runtime.sockets.delete(playerId);
+    this.broadcastRoomState(roomId);
+
+    // 이미 타이머가 있으면 정리
+    const existing = runtime.disconnectTimers.get(playerId);
+    if (existing) clearTimeout(existing);
+
+    // 다른 플레이어가 없으면 즉시 방 삭제 (잔재 방 방지)
+    const connectedPlayers = Object.values(runtime.state.players).filter((p) => p.connected);
+    if (connectedPlayers.length === 0) {
+      this.deleteRoom(roomId);
+      onRemoved();
+      return;
+    }
+
+    // 10초 유예 후에도 안 돌아오면 퇴장 처리
+    const timer = setTimeout(() => {
+      runtime.disconnectTimers.delete(playerId);
+      this.removePlayer(roomId, playerId);
+      onRemoved();
+    }, DISCONNECT_GRACE_MS);
+
+    runtime.disconnectTimers.set(playerId, timer);
+  }
+
+  leaveRoom(roomId: string, playerId: string): { deleted: boolean; newHostId?: string } {
+    const runtime = this.rooms.get(roomId);
+    if (runtime) {
+      const timer = runtime.disconnectTimers.get(playerId);
+      if (timer) {
+        clearTimeout(timer);
+        runtime.disconnectTimers.delete(playerId);
+      }
+    }
+    return this.removePlayer(roomId, playerId);
+  }
+
   removePlayer(roomId: string, playerId: string): { deleted: boolean; newHostId?: string } {
     const runtime = this.rooms.get(roomId);
     if (!runtime) return { deleted: false };
     delete runtime.state.players[playerId];
     runtime.sockets.delete(playerId);
+    const timer = runtime.disconnectTimers.get(playerId);
+    if (timer) {
+      clearTimeout(timer);
+      runtime.disconnectTimers.delete(playerId);
+    }
     this.broadcast(roomId, { type: "player_removed", id: playerId });
 
     if (Object.keys(runtime.state.players).length === 0) {
-      if (runtime.stageEndTimer) clearTimeout(runtime.stageEndTimer);
-      if (runtime.failCheckTimer) clearTimeout(runtime.failCheckTimer);
-      this.rooms.delete(roomId);
+      this.deleteRoom(roomId);
       return { deleted: true };
     }
 

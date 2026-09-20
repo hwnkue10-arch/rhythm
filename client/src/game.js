@@ -3,13 +3,14 @@ import { themeRegistry } from "./themes/ThemeRegistry.js";
 
 const BASE_SPEED = 0.36; // 초당 정규화 이동 속도 (반응성 향상)
 const SHIFT_MULTIPLIER = 1.55;
-const DASH_DISTANCE = 0.24; // 대시 거리 50% 상향 (순간 돌파감 극대화)
-const DASH_DURATION = 0.14; // 날렵한 순간 대시
-const DASH_COOLDOWN = 0.25; // 쿨타임 0.25초로 단축하여 더 민첩한 연타 대응
-const DASH_INVULN = DASH_DURATION;
-const PLAYER_RADIUS = 0.011; // 캐릭터 크기 40% 축소 (정밀 회피 및 날렵한 비주얼)
+const DASH_SPEED = 1.6; // 대시 발동 시 속도
+const MAX_DASH_TIME = 0.28; // 1회 최대 대시 지속 시간 한계치
+const DASH_COOLDOWN = 0.7; // 대시 쿨타임 0.7초
+const PLAYER_RADIUS = 0.011; // 캐릭터 크기
 const DEATH_FADE_SEC = 0.7; // 0.7초 동안 다운 연출
 const TRAIL_LIFETIME = 0.32;
+const REVIVE_WINDOW_SEC = 4.0; // 부활 제한 시간 4초
+const REVIVE_INVULN_SEC = 1.8; // 부활 직후 1.8초 무적
 
 export class Game {
   constructor(net, canvas, audioEl, roomState) {
@@ -20,10 +21,16 @@ export class Game {
     this.roomState = roomState;
 
     this.keys = new Set();
+    this.isDashing = false;
+    this.dashStartTime = 0;
     this.dashCooldownUntil = 0;
-    this.dashActiveUntil = 0;
     this.dashDir = { x: 0, y: 0 };
     this.localInvulnerableUntil = 0;
+
+    // 피격 FX (스크린 셰이크 & 붉은 플래시 비넷)
+    this.damageFlashTimer = 0;
+    this.screenShakeTimer = 0;
+    this.shakeIntensity = 0;
 
     this.timeline = null;
     this.stage = 1;
@@ -51,41 +58,60 @@ export class Game {
   }
 
   _onKeyDown(e) {
+    if (e.code === "Space") {
+      const now = performance.now() / 1000;
+      if (!this.keys.has("Space") && now >= this.dashCooldownUntil && !this.isDashing) {
+        const dir = this._inputDirection();
+        const me = this.roomState?.players[this.net.playerId];
+        if (me && !me.dead && (dir.x !== 0 || dir.y !== 0)) {
+          this.isDashing = true;
+          this.dashStartTime = now;
+          this.dashDir = dir;
+          this.localInvulnerableUntil = now + MAX_DASH_TIME; // 대시 지속 중 무적
+          this._spawnDashParticles(me, dir);
+        }
+      }
+    }
     this.keys.add(e.code);
-    if (e.code === "Space") this._tryDash();
   }
+
   _onKeyUp(e) {
+    if (e.code === "Space" && this.isDashing) {
+      this._stopDash();
+    }
     this.keys.delete(e.code);
   }
 
-  _tryDash() {
+  _stopDash() {
+    if (!this.isDashing) return;
     const now = performance.now() / 1000;
-    if (now < this.dashCooldownUntil) return;
-    const dir = this._inputDirection();
-    if (dir.x === 0 && dir.y === 0) return;
-    this.dashDir = dir;
-    this.dashActiveUntil = now + DASH_DURATION;
-    this.dashCooldownUntil = now + DASH_COOLDOWN;
-    this.localInvulnerableUntil = now + DASH_INVULN;
+    this.isDashing = false;
+    this.dashCooldownUntil = now + DASH_COOLDOWN; // 떼는 순간부터 쿨다운 시작
+    this.localInvulnerableUntil = now; // 대시 종료 시 대시 무적도 해제
+  }
 
-    const me = this.roomState.players[this.net.playerId];
-    if (me) {
-      const anim = this._getAnim(me.id);
-      for (let i = 0; i < 12; i++) {
-        const a = Math.atan2(-dir.y, -dir.x) + (Math.random() - 0.5) * 1.2;
-        const spd = 0.25 + Math.random() * 0.4;
-        anim.dashParticles.push({
-          x: me.x,
-          y: me.y,
-          vx: Math.cos(a) * spd,
-          vy: Math.sin(a) * spd,
-          life: 0.35,
-          age: 0,
-          size: 0.007 + Math.random() * 0.008,
-          rot: Math.random() * Math.PI * 2,
-        });
-      }
+  _spawnDashParticles(me, dir) {
+    const anim = this._getAnim(me.id);
+    for (let i = 0; i < 14; i++) {
+      const a = Math.atan2(-dir.y, -dir.x) + (Math.random() - 0.5) * 1.2;
+      const spd = 0.3 + Math.random() * 0.45;
+      anim.dashParticles.push({
+        x: me.x,
+        y: me.y,
+        vx: Math.cos(a) * spd,
+        vy: Math.sin(a) * spd,
+        life: 0.35,
+        age: 0,
+        size: 0.007 + Math.random() * 0.008,
+        rot: Math.random() * Math.PI * 2,
+      });
     }
+  }
+
+  triggerHitFX() {
+    this.damageFlashTimer = 0.35; // 0.35초간 붉은 비넷 플래시
+    this.screenShakeTimer = 0.3; // 0.3초간 화면 흔들림
+    this.shakeIntensity = 18; // 셰이크 강도
   }
 
   _inputDirection() {
@@ -178,11 +204,20 @@ export class Game {
     const me = this.roomState.players[this.net.playerId];
     const now = performance.now() / 1000;
 
+    // 스크린 셰이크 & 대미지 플래시 타이머 감소
+    if (this.damageFlashTimer > 0) this.damageFlashTimer = Math.max(0, this.damageFlashTimer - dt);
+    if (this.screenShakeTimer > 0) this.screenShakeTimer = Math.max(0, this.screenShakeTimer - dt);
+
     if (me && !me.dead) {
-      // 1. 이동 및 대시
-      if (now < this.dashActiveUntil) {
-        me.x += this.dashDir.x * (DASH_DISTANCE / DASH_DURATION) * dt;
-        me.y += this.dashDir.y * (DASH_DISTANCE / DASH_DURATION) * dt;
+      // 1. 이동 및 대시 처리
+      if (this.isDashing) {
+        // 최대 대시 시간 한계치 체크
+        if (now - this.dashStartTime >= MAX_DASH_TIME) {
+          this._stopDash();
+        } else {
+          me.x += this.dashDir.x * DASH_SPEED * dt;
+          me.y += this.dashDir.y * DASH_SPEED * dt;
+        }
       } else {
         const dir = this._inputDirection();
         const speed = BASE_SPEED * (this.keys.has("ShiftLeft") || this.keys.has("ShiftRight") ? SHIFT_MULTIPLIER : 1);
@@ -229,6 +264,7 @@ export class Game {
           if (checkCollision(me, ev, local)) {
             this.net.send("hit", {});
             this.localInvulnerableUntil = now + 0.8;
+            this.triggerHitFX();
             break;
           }
         }
@@ -294,7 +330,16 @@ export class Game {
     ctx.clearRect(0, 0, W, H);
 
     ctx.save();
-    // 지오메트리 대쉬 스타일 비트 줌 펄스 (모든 박자에 반응하여 쿵쿵 뜀, 최대 1.045배)
+
+    // 1. 스크린 셰이크 적용 (피격 시 흔들림)
+    if (this.screenShakeTimer > 0) {
+      const shakeRatio = this.screenShakeTimer / 0.3;
+      const ox = (Math.random() - 0.5) * this.shakeIntensity * shakeRatio;
+      const oy = (Math.random() - 0.5) * this.shakeIntensity * shakeRatio;
+      ctx.translate(ox, oy);
+    }
+
+    // 지오메트리 대쉬 스타일 비트 줌 펄스
     if (this.beatIntensity > 0.01) {
       const scale = 1.0 + Math.min(0.045, this.beatIntensity * 0.042);
       ctx.translate(W / 2, H / 2);
@@ -324,18 +369,35 @@ export class Game {
     // 4. 지오메트리 대쉬 스타일 비트 네온 블룸(빛 번짐) 오버레이
     this.currentTheme.renderBloom(ctx, W, H, this.beatIntensity);
 
+    // 5. 피격 시 붉은 비넷 플래시 FX
+    if (this.damageFlashTimer > 0) {
+      const flashAlpha = Math.min(0.7, (this.damageFlashTimer / 0.35) * 0.7);
+      const vigGrad = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.25, W / 2, H / 2, Math.max(W, H) * 0.75);
+      vigGrad.addColorStop(0, "rgba(255, 0, 0, 0)");
+      vigGrad.addColorStop(1, `rgba(239, 68, 68, ${flashAlpha})`);
+      ctx.fillStyle = vigGrad;
+      ctx.fillRect(0, 0, W, H);
+    }
+
     ctx.restore();
 
-    // 5. HUD 정보 갱신
-    document.getElementById("hud-stage").textContent = `스테이지 ${this.stage} / 3 (${this.currentTheme.name})`;
+    // 6. HUD 정보 갱신
+    const hudStage = document.getElementById("hud-stage");
+    if (hudStage) {
+      hudStage.innerHTML = `<span class="stage-badge">STAGE ${this.stage} / 3</span> <span class="theme-badge">${this.currentTheme.name}</span>`;
+    }
     const me = this.roomState.players[this.net.playerId];
-    let statusText = "";
-    if (me) {
+    const hudLives = document.getElementById("hud-lives");
+    if (me && hudLives) {
+      let statusText = "";
       if (me.dead) {
-        const remainSec = Math.max(0, 3 - (Date.now() - (me.diedAt || 0)) / 1000).toFixed(1);
-        statusText = ` (사망 - ${remainSec}초 내 터치 시 부활)`;
+        const remainSec = Math.max(0, REVIVE_WINDOW_SEC - (Date.now() - (me.diedAt || 0)) / 1000).toFixed(1);
+        statusText = `<span class="revive-wait-text"> (사망 - ${remainSec}초 내 터치 시 부활)</span>`;
       }
-      document.getElementById("hud-lives").textContent = `${"❤".repeat(me.lives)}${statusText}`;
+      const hearts = Array.from({ length: 3 })
+        .map((_, i) => `<span class="heart-icon ${i < me.lives ? 'alive' : 'lost'}">❤</span>`)
+        .join("");
+      hudLives.innerHTML = `${hearts}${statusText}`;
     }
   }
 
@@ -387,20 +449,29 @@ export class Game {
       ctx.scale(scale, scale);
       ctx.rotate(anim.facing + Math.PI / 2 + t * Math.PI);
 
-      // 사망 후 부활 대기 링 표시
-      const remainRatio = Math.max(0, 1 - (Date.now() - (p.diedAt || Date.now())) / 3000);
+      // 사망 플레이어 깜빡임 (Flicker 연출: 0.2 ~ 1.0)
+      const flickerAlpha = 0.2 + 0.8 * (0.5 + 0.5 * Math.sin(now / 70));
+      ctx.globalAlpha = flickerAlpha;
+
+      // 사망 후 부활 대기 링 표시 (4초 기준)
+      const remainRatio = Math.max(0, 1 - (Date.now() - (p.diedAt || Date.now())) / (REVIVE_WINDOW_SEC * 1000));
       ctx.strokeStyle = p.color;
       ctx.lineWidth = 2.5;
       ctx.shadowColor = p.color;
-      ctx.shadowBlur = 12;
+      ctx.shadowBlur = 14;
       ctx.beginPath();
       ctx.arc(0, 0, PLAYER_RADIUS * W * 2.2, -Math.PI / 2, -Math.PI / 2 + remainRatio * Math.PI * 2);
       ctx.stroke();
 
-      // 쓰러진 심볼
-      ctx.fillStyle = "rgba(200, 200, 200, 0.6)";
+      // 쓰러진 심볼 (강렬한 네온 깜빡임)
+      ctx.fillStyle = p.color;
       ctx.beginPath();
-      ctx.arc(0, 0, PLAYER_RADIUS * W * 0.7, 0, Math.PI * 2);
+      ctx.arc(0, 0, PLAYER_RADIUS * W * 0.85, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = "#ffffff";
+      ctx.beginPath();
+      ctx.arc(0, 0, PLAYER_RADIUS * W * 0.45, 0, Math.PI * 2);
       ctx.fill();
     } else {
       ctx.rotate(anim.facing + Math.PI / 2);

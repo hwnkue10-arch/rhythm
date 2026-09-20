@@ -68,6 +68,12 @@ export interface Timeline {
   beats: BeatPulse[]; // 모든 박자에 반응하는 배경 펄스용
 }
 
+export interface PlayerStats {
+  hitCount: number;
+  deathCount: number;
+  reviveCount: number;
+}
+
 export interface PlayerState {
   id: string;
   nickname: string;
@@ -79,6 +85,7 @@ export interface PlayerState {
   x: number;
   y: number;
   invulnerableUntil: number; // ms epoch
+  stats?: PlayerStats;
 }
 
 export type RoomPhase = "lobby" | "playing" | "stage_clear" | "stage_failed" | "game_clear";

@@ -20,15 +20,74 @@ document.getElementById("btn-create").addEventListener("click", async () => {
   await net.ready();
   net.send("create_room", { nickname: nicknameOrDefault() });
 });
-document.getElementById("btn-join").addEventListener("click", async () => {
-  await net.ready();
-  const code = document.getElementById("room-code-input").value.trim().toUpperCase();
-  if (!code) return;
-  net.send("join_room", { roomId: code, nickname: nicknameOrDefault() });
-});
+
 function nicknameOrDefault() {
   const v = document.getElementById("nickname").value.trim();
   return v || `player${Math.floor(Math.random() * 1000)}`;
+}
+
+net.on("room_list_update", (msg) => {
+  renderRoomList(msg.rooms || []);
+});
+
+function renderRoomList(rooms) {
+  const container = document.getElementById("roomList");
+  if (!container) return;
+  container.innerHTML = "";
+
+  if (rooms.length === 0) {
+    container.innerHTML = `<p style="color: #888; font-size: 14px;">현재 생성된 방이 없습니다.</p>`;
+    return;
+  }
+
+  for (const r of rooms) {
+    const card = document.createElement("div");
+    card.className = "room-card";
+    card.style.cssText = `
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 10px 14px;
+      margin-bottom: 8px;
+      background: rgba(255, 255, 255, 0.08);
+      border-radius: 8px;
+      cursor: ${r.isPlaying || r.playerCount >= r.maxPlayers ? "not-allowed" : "pointer"};
+      opacity: ${r.isPlaying || r.playerCount >= r.maxPlayers ? "0.6" : "1"};
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      transition: background 0.2s;
+    `;
+
+    const statusText = r.isPlaying
+      ? "게임 진행 중"
+      : r.playerCount >= r.maxPlayers
+        ? "인원 초과"
+        : "입장 가능";
+
+    card.innerHTML = `
+      <div>
+        <div style="font-weight: bold; font-size: 15px;">${escapeHtml(r.hostNickname)}의 방</div>
+        <div style="font-size: 12px; color: #aaa;">ID: ${r.id} | 인원: ${r.playerCount}/${r.maxPlayers}</div>
+      </div>
+      <div style="font-size: 13px; font-weight: 600; color: ${r.isPlaying ? '#ff6b6b' : r.playerCount >= r.maxPlayers ? '#f59f00' : '#51cf66'};">
+        ${statusText}
+      </div>
+    `;
+
+    if (!r.isPlaying && r.playerCount < r.maxPlayers) {
+      card.addEventListener("mouseenter", () => {
+        card.style.background = "rgba(255, 255, 255, 0.18)";
+      });
+      card.addEventListener("mouseleave", () => {
+        card.style.background = "rgba(255, 255, 255, 0.08)";
+      });
+      card.addEventListener("click", async () => {
+        await net.ready();
+        net.joinRoom(r.id, nicknameOrDefault());
+      });
+    }
+
+    container.appendChild(card);
+  }
 }
 
 net.on("error", (msg) => {
@@ -246,11 +305,17 @@ net.on("stage_start", (msg) => {
 net.on("life_update", (msg) => {
   const p = roomState?.players[msg.id];
   if (!p) return;
+  const prevLives = p.lives;
   p.lives = msg.lives;
   p.dead = msg.dead;
   p.invulnerableUntil = msg.invulnerableUntil || 0;
   if (p.dead && !p.diedAt) p.diedAt = Date.now();
   if (!p.dead) p.diedAt = null;
+
+  // 내 캐릭터의 목숨이 감소했을 때 화면 피격 FX 트리거
+  if (msg.id === net.playerId && msg.lives < prevLives && game) {
+    game.triggerHitFX();
+  }
 });
 
 net.on("player_revived", (msg) => {
@@ -259,6 +324,11 @@ net.on("player_revived", (msg) => {
   p.dead = false;
   p.lives = msg.lives;
   p.diedAt = null;
+  // 부활 직후 1.8초 무적 시간 반영
+  p.invulnerableUntil = msg.invulnerableUntil || (Date.now() + 1800);
+  if (msg.id === net.playerId && game) {
+    game.localInvulnerableUntil = (performance.now() / 1000) + 1.8;
+  }
   if (typeof msg.x === "number") p.x = msg.x;
   if (typeof msg.y === "number") p.y = msg.y;
 });
@@ -284,29 +354,77 @@ document.getElementById("volume-slider").addEventListener("input", (e) => {
 net.on("stage_clear", (msg) => {
   if (game) game.stopStage();
   showResult(
-    "스테이지 클리어!",
-    msg.nextStage <= 3 ? `다음 스테이지(${msg.nextStage})로 진행할 수 있습니다.` : "",
-    { next: true }
+    "STAGE CLEAR!",
+    msg.nextStage <= 3 ? `스테이지를 완벽하게 돌파했습니다!` : "",
+    { next: true, stats: msg.stats, nextStage: msg.nextStage }
   );
 });
 net.on("stage_failed", () => {
   if (game) game.stopStage();
-  showResult("스테이지 실패", "전원이 쓰러졌습니다. 이 스테이지를 다시 시작할 수 있습니다.", { restart: true });
+  showResult("STAGE FAILED", "전원이 쓰러졌습니다. 이 스테이지를 다시 시작할 수 있습니다.", { restart: true });
 });
-net.on("game_clear", () => {
+net.on("game_clear", (msg) => {
   if (game) game.stopStage();
-  showResult("게임 클리어!", "모든 스테이지를 클리어했습니다. 축하합니다!", {});
+  showResult("ALL STAGES CLEAR!", "모든 스테이지를 클리어했습니다. 축하합니다!", { stats: msg.stats });
 });
 
-function showResult(title, desc, { next, restart } = {}) {
+function showResult(title, desc, { next, restart, stats, nextStage } = {}) {
   showScreen("result");
   document.getElementById("result-title").textContent = title;
   document.getElementById("result-desc").textContent = desc;
+
+  // 통계 테이블 렌더링
+  const statsContainer = document.getElementById("result-stats-container");
+  statsContainer.innerHTML = "";
+
+  if (stats && Object.keys(stats).length > 0) {
+    const table = document.createElement("table");
+    table.className = "stats-table";
+    table.innerHTML = `
+      <thead>
+        <tr>
+          <th>플레이어</th>
+          <th>피격 횟수</th>
+          <th>죽은 횟수</th>
+          <th>살린 횟수</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${Object.values(stats)
+        .map(
+          (p) => `
+          <tr>
+            <td><span class="dot" style="background:${p.color}"></span><b>${escapeHtml(p.nickname)}</b></td>
+            <td><span class="stat-badge hit">${p.hitCount}회</span></td>
+            <td><span class="stat-badge death">${p.deathCount}회</span></td>
+            <td><span class="stat-badge revive">${p.reviveCount}회</span></td>
+          </tr>`
+        )
+        .join("")}
+      </tbody>
+    `;
+    statsContainer.appendChild(table);
+  }
+
   const isHost = roomState?.hostId === net.playerId;
   const nextBtn = document.getElementById("btn-next-stage");
   const restartBtn = document.getElementById("btn-restart");
-  nextBtn.classList.toggle("hidden", !(next && isHost));
-  restartBtn.classList.toggle("hidden", !(restart && isHost));
+  const giveUpBtn = document.getElementById("btn-giveup");
+  const waitMsg = document.getElementById("result-wait-msg");
+
+  // 방장에게만 모든 액션 버튼(다음 스테이지, 재시작, 처음으로) 노출
+  if (isHost) {
+    nextBtn.classList.toggle("hidden", !next);
+    restartBtn.classList.toggle("hidden", !restart);
+    giveUpBtn.classList.remove("hidden");
+    waitMsg.classList.add("hidden");
+  } else {
+    // 일반 팀원에게는 버튼을 숨기고 '방장의 선택을 기다리는 중...' 표시
+    nextBtn.classList.add("hidden");
+    restartBtn.classList.add("hidden");
+    giveUpBtn.classList.add("hidden");
+    waitMsg.classList.remove("hidden");
+  }
 }
 
 document.getElementById("btn-next-stage").addEventListener("click", () => net.send("advance_stage"));
@@ -314,4 +432,33 @@ document.getElementById("btn-restart").addEventListener("click", () => net.send(
 document.getElementById("btn-giveup").addEventListener("click", () => {
   net.send("give_up");
   showScreen("lobby");
+});
+
+// ---------- 방 나가기 기능 ----------
+function handleLeaveRoom() {
+  if (game) game.stopStage();
+  net.leaveRoom();
+  roomState = null;
+  showScreen("landing");
+}
+
+const leaveLobbyBtn = document.getElementById("btn-leave-lobby");
+if (leaveLobbyBtn) leaveLobbyBtn.addEventListener("click", handleLeaveRoom);
+
+const leaveGameBtn = document.getElementById("btn-leave-game");
+if (leaveGameBtn) leaveGameBtn.addEventListener("click", handleLeaveRoom);
+
+net.on("left_room", () => {
+  if (game) game.stopStage();
+  roomState = null;
+  showScreen("landing");
+});
+
+// ---------- 새로고침 세션 자동 복원 (Reconnect) ----------
+window.addEventListener("DOMContentLoaded", async () => {
+  await net.ready();
+  const reconnected = net.tryReconnect();
+  if (!reconnected) {
+    showScreen("landing");
+  }
 });

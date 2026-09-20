@@ -72,8 +72,18 @@ app.post("/api/youtube-download", async (req, res) => {
 });
 const server = http_1.default.createServer(app);
 const wss = new ws_1.WebSocketServer({ server });
+function broadcastRoomList() {
+    const list = roomManager_1.roomManager.getRoomList();
+    const payload = JSON.stringify({ type: "room_list_update", rooms: list });
+    for (const client of wss.clients) {
+        if (client.readyState === ws_1.WebSocket.OPEN) {
+            client.send(payload);
+        }
+    }
+}
 function stageEndHandler(roomId) {
     roomManager_1.roomManager.resolveStageTimeout(roomId);
+    broadcastRoomList();
 }
 async function startStageWithAnalysis(roomId, stage) {
     const runtime = roomManager_1.roomManager.getRoom(roomId);
@@ -85,8 +95,11 @@ async function startStageWithAnalysis(roomId, stage) {
     const songId = `${roomId}-${stage}`;
     const timeline = await (0, audioAnalysis_1.analyzeSongToTimeline)(song.filePath, songId, stage, song.durationSec);
     roomManager_1.roomManager.beginStage(roomId, stage, timeline, stageEndHandler);
+    broadcastRoomList();
 }
 wss.on("connection", (socket) => {
+    // 클라이언트 접속 시 현재 방 목록 전송
+    socket.send(JSON.stringify({ type: "room_list_update", rooms: roomManager_1.roomManager.getRoomList() }));
     socket.on("message", async (raw) => {
         let msg;
         try {
@@ -101,6 +114,7 @@ wss.on("connection", (socket) => {
                     const { room, playerId } = roomManager_1.roomManager.createRoom(socket, msg.nickname || "Player");
                     socket.send(JSON.stringify({ type: "joined", roomId: room.id, playerId }));
                     roomManager_1.roomManager.broadcastRoomState(room.id);
+                    broadcastRoomList();
                     break;
                 }
                 case "join_room": {
@@ -111,6 +125,7 @@ wss.on("connection", (socket) => {
                     }
                     socket.send(JSON.stringify({ type: "joined", roomId: result.room.id, playerId: result.playerId }));
                     roomManager_1.roomManager.broadcastRoomState(result.room.id);
+                    broadcastRoomList();
                     break;
                 }
                 case "set_song": {
@@ -119,10 +134,12 @@ wss.on("connection", (socket) => {
                 }
                 case "kick": {
                     roomManager_1.roomManager.kick(msg.roomId, msg.playerId, msg.targetId);
+                    broadcastRoomList();
                     break;
                 }
                 case "transfer_host": {
                     roomManager_1.roomManager.transferHost(msg.roomId, msg.playerId, msg.targetId);
+                    broadcastRoomList();
                     break;
                 }
                 case "input_pos": {
@@ -130,7 +147,10 @@ wss.on("connection", (socket) => {
                     break;
                 }
                 case "hit": {
-                    roomManager_1.roomManager.handleHit(msg.roomId, msg.playerId, (roomId) => roomManager_1.roomManager.markAllFailed(roomId));
+                    roomManager_1.roomManager.handleHit(msg.roomId, msg.playerId, (roomId) => {
+                        roomManager_1.roomManager.markAllFailed(roomId);
+                        broadcastRoomList();
+                    });
                     break;
                 }
                 case "revive_request": {
@@ -150,6 +170,7 @@ wss.on("connection", (socket) => {
                 }
                 case "restart_stage": {
                     roomManager_1.roomManager.restartStage(msg.roomId, msg.playerId, stageEndHandler);
+                    broadcastRoomList();
                     break;
                 }
                 case "advance_stage": {
@@ -162,6 +183,7 @@ wss.on("connection", (socket) => {
                 }
                 case "give_up": {
                     roomManager_1.roomManager.giveUp(msg.roomId, msg.playerId);
+                    broadcastRoomList();
                     break;
                 }
                 default:
@@ -175,10 +197,12 @@ wss.on("connection", (socket) => {
     });
     socket.on("close", () => {
         const found = roomManager_1.roomManager.findRoomIdBySocket(socket);
-        if (found)
+        if (found) {
             roomManager_1.roomManager.removePlayer(found.roomId, found.playerId);
+            broadcastRoomList();
+        }
     });
 });
-server.listen(PORT, () => {
-    console.log(`리듬 게임 서버가 http://localhost:${PORT} 에서 실행 중입니다.`);
+server.listen(PORT, '0.0.0.0', () => {
+    console.log(`리듬 게임 서버가 http://0.0.0.0:${PORT} 에서 실행 중입니다. (외부 접속 허용)`);
 });

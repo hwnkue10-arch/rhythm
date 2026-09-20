@@ -17,10 +17,14 @@ async function fetchYoutubeMeta(url) {
     const info = await youtube_dl_exec_1.default(url, {
         dumpSingleJson: true,
         noWarnings: true,
-        noCallHome: true,
         noCheckCertificates: true,
         preferFreeFormats: true,
         skipDownload: true,
+        extractorArgs: "youtube:player_client=default",
+        addHeader: [
+            "referer:https://www.youtube.com/",
+            "user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+        ],
     });
     return {
         title: info.title ?? "제목 없음",
@@ -41,8 +45,12 @@ async function downloadYoutubeAudio(url, uploadDir, songId) {
         output: outputTemplate,
         ffmpegLocation: ffmpeg_static_1.default,
         noWarnings: true,
-        noCallHome: true,
         noCheckCertificates: true,
+        extractorArgs: "youtube:player_client=default",
+        addHeader: [
+            "referer:https://www.youtube.com/",
+            "user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+        ],
     });
     const finalPath = path_1.default.join(uploadDir, `${songId}.mp3`);
     if (!fs_1.default.existsSync(finalPath)) {

@@ -25,6 +25,22 @@ class RoomManager {
     constructor() {
         this.rooms = new Map();
     }
+    getRoomList() {
+        const list = [];
+        for (const [id, runtime] of this.rooms) {
+            const host = runtime.state.players[runtime.state.hostId];
+            const players = Object.values(runtime.state.players);
+            list.push({
+                id,
+                hostNickname: host ? host.nickname : "알 수 없음",
+                playerCount: players.length,
+                maxPlayers: 4,
+                phase: runtime.state.phase,
+                isPlaying: runtime.state.phase !== "lobby",
+            });
+        }
+        return list;
+    }
     createRoom(hostSocket, nickname) {
         const roomId = (0, uuid_1.v4)().slice(0, 6).toUpperCase();
         const playerId = (0, uuid_1.v4)();
@@ -75,6 +91,7 @@ class RoomManager {
             x: 0.5,
             y: 0.8,
             invulnerableUntil: 0,
+            stats: { hitCount: 0, deathCount: 0, reviveCount: 0 },
         };
     }
     getRoom(roomId) {
@@ -160,6 +177,7 @@ class RoomManager {
             p.dead = false;
             p.diedAt = null;
             p.invulnerableUntil = 0;
+            p.stats = { hitCount: 0, deathCount: 0, reviveCount: 0 };
         }
         const serverStartTime = Date.now() + 1500; // 클라이언트가 준비할 시간 버퍼
         this.broadcast(roomId, {
@@ -201,7 +219,16 @@ class RoomManager {
         if (!runtime)
             return;
         const wasLastStage = runtime.state.stage >= 3;
-        for (const p of Object.values(runtime.state.players)) {
+        // 플레이어별 통계 데이터 모음
+        const playerStats = {};
+        for (const [pid, p] of Object.entries(runtime.state.players)) {
+            playerStats[pid] = {
+                nickname: p.nickname,
+                color: p.color,
+                hitCount: p.stats?.hitCount || 0,
+                deathCount: p.stats?.deathCount || 0,
+                reviveCount: p.stats?.reviveCount || 0,
+            };
             p.lives = MAX_LIVES;
             p.dead = false;
             p.diedAt = null;
@@ -209,12 +236,12 @@ class RoomManager {
         if (wasLastStage) {
             runtime.state.phase = "game_clear";
             this.broadcastRoomState(roomId);
-            this.broadcast(roomId, { type: "game_clear" });
+            this.broadcast(roomId, { type: "game_clear", stats: playerStats });
         }
         else {
             runtime.state.phase = "stage_clear";
             this.broadcastRoomState(roomId);
-            this.broadcast(roomId, { type: "stage_clear", nextStage: runtime.state.stage + 1 });
+            this.broadcast(roomId, { type: "stage_clear", nextStage: runtime.state.stage + 1, stats: playerStats });
         }
     }
     handleHit(roomId, playerId, onAllDead) {
@@ -227,11 +254,15 @@ class RoomManager {
         const now = Date.now();
         if (now < p.invulnerableUntil)
             return; // 무적 시간 중 판정 무시
+        if (!p.stats)
+            p.stats = { hitCount: 0, deathCount: 0, reviveCount: 0 };
+        p.stats.hitCount += 1;
         p.lives -= 1;
         if (p.lives <= 0) {
             p.lives = 0;
             p.dead = true;
             p.diedAt = now;
+            p.stats.deathCount += 1;
         }
         else {
             p.invulnerableUntil = now + INVULNERABLE_MS;
@@ -279,8 +310,11 @@ class RoomManager {
         const dist = Math.sqrt(dx * dx + dy * dy);
         if (dist > 0.06)
             return false; // 정규화 좌표(0~1) 기준 근접 판정
-        // 부활 성공: 살려준 사람에게 2초 쿨다운 부여
+        // 부활 성공: 살려준 사람에게 2초 쿨다운 부여 및 통계 카운트
         runtime.reviverCooldowns.set(reviverId, now + REVIVER_COOLDOWN_MS);
+        if (!reviver.stats)
+            reviver.stats = { hitCount: 0, deathCount: 0, reviveCount: 0 };
+        reviver.stats.reviveCount += 1;
         target.dead = false;
         target.lives = 1;
         target.diedAt = null;
