@@ -5,7 +5,7 @@
  * - 음악의 비트 시점(local >= 0)에 눈부신 네온 발광과 함께 실제 피격 판정이 활성화됩니다.
  */
 
-const PLAYER_RADIUS = 0.011;
+const PLAYER_RADIUS = 0.003; // JSAB-style extremely precise core hitbox
 
 /**
  * 특정 이벤트가 현재 활성 판정 시간 내에 있는지 여부를 반환합니다.
@@ -19,6 +19,7 @@ export function isEventCollidable(ev, local) {
  * 특정 이벤트가 현재 화면에 그려져야 하는지 여부.
  */
 export function isEventVisible(ev, local) {
+  if (ev.type === "orb_move" || ev.params?.noCollision) return false;
   const warnDur = ev.warnDuration || 0.85;
   const activeDur = ev.activeDuration || 0.35;
   return local >= -warnDur && local < activeDur + 0.2;
@@ -31,14 +32,59 @@ export function isEventVisible(ev, local) {
  * @param {number} local - (elapsed - ev.t)
  * @returns {boolean}
  */
-export function checkCollision(player, ev, local) {
+export function checkCollision(player, ev, local, orbs) {
+  if (ev.type === "orb_move" || ev.params?.noCollision) return false;
   if (!isEventCollidable(ev, local)) return false;
 
   const { type, params, activeDuration } = ev;
   const progress = local / (activeDuration || 0.35); // 0 -> 1
 
   if (type === "laser") {
-    const halfW = (params.width || 0.05) / 2 + PLAYER_RADIUS;
+    // BUILD 1 & BUILD 2: M-C 연결 회전 레이저 선분 피격 판정
+    if (params.isMCLaser && orbs && orbs.left && orbs.right) {
+      const aspect = 16 / 9;
+      const mx = orbs.left.x;
+      const my = orbs.left.y;
+      const cx = orbs.right.x;
+      const cy = orbs.right.y;
+      const midX = (mx + cx) * 0.5;
+      const midY = (my + cy) * 0.5;
+      const halfW = ((params.width || 0.032) / 2) + PLAYER_RADIUS;
+
+      // 0.04초 동안 양 오브젝트에서 중앙으로 뻗어나와 맞닿음
+      const meetDur = 0.04;
+      if (local < meetDur) {
+        const p = Math.max(0, Math.min(1.0, local / meetDur));
+        const p1X = mx + (midX - mx) * p;
+        const p1Y = my + (midY - my) * p;
+        const p2X = cx + (midX - cx) * p;
+        const p2Y = cy + (midY - cy) * p;
+
+        const distToSeg = (ax, ay, bx, by) => {
+          const sdx = (bx - ax) * aspect;
+          const sdy = by - ay;
+          const slenSq = sdx * sdx + sdy * sdy;
+          if (slenSq === 0) return Math.hypot((player.x - ax) * aspect, player.y - ay);
+          let st = (((player.x - ax) * aspect) * sdx + (player.y - ay) * sdy) / slenSq;
+          st = Math.max(0, Math.min(1, st));
+          return Math.hypot((player.x - (ax + st * (bx - ax))) * aspect, player.y - (ay + st * (by - ay)));
+        };
+
+        return distToSeg(mx, my, p1X, p1Y) < halfW || distToSeg(cx, cy, p2X, p2Y) < halfW;
+      }
+
+      const dx = (cx - mx) * aspect;
+      const dy = cy - my;
+      const lenSq = dx * dx + dy * dy;
+      let t = lenSq === 0 ? 0 : (((player.x - mx) * aspect) * dx + (player.y - my) * dy) / lenSq;
+      t = Math.max(0, Math.min(1, t));
+      const closeX = mx + (t * (cx - mx));
+      const closeY = my + (t * (cy - my));
+      const dist = Math.hypot((player.x - closeX) * aspect, player.y - closeY);
+      return dist < halfW;
+    }
+
+    const halfW = (params.width || 0.028) / 2 + PLAYER_RADIUS;
     if (params.direction === "horizontal") {
       return Math.abs(player.y - params.y) < halfW;
     }
@@ -159,6 +205,33 @@ export function checkCollision(player, ev, local) {
     return perp < halfW;
   }
 
+  if (type === "melody_bolt") {
+    const startX = params.startX ?? 0;
+    const targetX = params.targetX ?? (startX === 0 ? 0.7 : 0.3);
+    const y = params.y ?? 0.5;
+    const curX = startX + (targetX - startX) * progress;
+    const halfH = ((params.width || 0.055) / 2) + PLAYER_RADIUS;
+    const halfW = 0.045 + PLAYER_RADIUS;
+    return Math.abs(player.x - curX) < halfW && Math.abs(player.y - y) < halfH;
+  }
+
+  if (type === "trail_hazard") {
+    const x1 = params.x1 ?? params.x;
+    const y1 = params.y1 ?? params.y;
+    const x2 = params.x2 ?? params.x;
+    const y2 = params.y2 ?? params.y;
+    const dx = x2 - x1;
+    const dy = y2 - y1;
+    const lenSq = dx * dx + dy * dy;
+    let t = lenSq === 0 ? 0 : ((player.x - x1) * dx + (player.y - y1) * dy) / lenSq;
+    t = Math.max(0, Math.min(1, t));
+    const closestX = x1 + t * dx;
+    const closestY = y1 + t * dy;
+    const dist = Math.hypot(player.x - closestX, player.y - closestY);
+    const halfW = (params.width || 0.024) / 2 + PLAYER_RADIUS;
+    return dist < halfW;
+  }
+
   return false;
 }
 
@@ -172,6 +245,7 @@ export function checkCollision(player, ev, local) {
  * @param {number} H - 캔버스 높이
  */
 export function renderObstacle(ctx, ev, local, theme, W, H) {
+  if (ev.params?.isMCLaser) return; // M-C 연결 레이저는 구체 렌더러(_drawGrooveOrbs)에서 일체형으로 렌더링
   const warnDur = ev.warnDuration || 0.85;
   const activeDur = ev.activeDuration || 0.35;
   if (local < -warnDur || local > activeDur + 0.2) return;
@@ -213,7 +287,7 @@ function renderWarningShape(ctx, ev, progress, W, H) {
   const { type, params } = ev;
 
   if (type === "laser") {
-    const w = (params.width || 0.05) * progress; // 경고선이 중심으로 모여들거나 굵어짐
+    const w = (params.width || 0.028) * progress; // 경고선이 중심으로 모여들거나 굵어짐
     if (params.direction === "horizontal") {
       ctx.fillRect(0, (params.y - w / 2) * H, W, w * H);
       ctx.strokeRect(0, (params.y - w / 2) * H, W, w * H);
@@ -230,7 +304,11 @@ function renderWarningShape(ctx, ev, progress, W, H) {
       ctx.restore();
     }
   } else if (type === "shockwave") {
-    // 중심으로 좁혀오는 예고 링
+    // 그루브 페이즈 등 오브젝트(구체)에서 발사되는 충격파(params.side)는
+    // 외부에서 원이 모여드는 예고 연출을 삭제하고 오브젝트 내부 충전 연출로 일원화
+    if (params.side) return;
+
+    // 중심으로 좁혀오는 예고 링 (단독 shockwave의 경우만)
     const maxR = params.radius || 0.6;
     const previewR = maxR * (1 - progress * 0.4);
     ctx.beginPath();
@@ -321,6 +399,70 @@ function renderWarningShape(ctx, ev, progress, W, H) {
     ctx.arc(params.x * W, params.y * H, 10 * progress, 0, Math.PI * 2);
     ctx.stroke();
     ctx.restore();
+  } else if (type === "melody_bolt") {
+    // 멜로디 가로 탄환: 시작점(0 or 1)부터 도착 지점(targetX)까지만 경고 인디케이터 표시
+    const startX = (params.startX ?? 0) * W;
+    const targetX = (params.targetX ?? (params.startX === 0 ? 0.7 : 0.3)) * W;
+    const y = params.y * H;
+    const w = (params.width || 0.055) * H;
+    const minX = Math.min(startX, targetX);
+    const maxX = Math.max(startX, targetX);
+
+    ctx.save();
+
+    // 1. 발사 경로 점선 가이드 (startX부터 targetX 구간까지만!)
+    ctx.setLineDash([8, 6]);
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    ctx.moveTo(startX, y);
+    ctx.lineTo(targetX, y);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // 2. 경고 빔 영역 (startX부터 targetX 범위만 채움)
+    const warnThickness = w * (0.35 + 0.65 * progress);
+    ctx.fillRect(minX, y - warnThickness / 2, maxX - minX, warnThickness);
+
+    // 3. 목표 지점(도착점) 인디케이터 마커
+    const markerR = (w * 0.45) * (0.85 + 0.25 * Math.sin(progress * Math.PI * 4));
+    ctx.lineWidth = 2.0;
+    ctx.beginPath();
+    ctx.arc(targetX, y, markerR, 0, Math.PI * 2);
+    ctx.stroke();
+
+    // 목표점 십자 크로스헤어
+    ctx.beginPath();
+    ctx.moveTo(targetX - markerR * 1.4, y);
+    ctx.lineTo(targetX + markerR * 1.4, y);
+    ctx.moveTo(targetX, y - markerR * 1.4);
+    ctx.lineTo(targetX, y + markerR * 1.4);
+    ctx.stroke();
+
+    // 4. 발사 시작 지점 화살표
+    const dir = targetX > startX ? 1 : -1;
+    ctx.beginPath();
+    ctx.moveTo(startX, y - w * 0.4);
+    ctx.lineTo(startX + dir * 18 * progress, y);
+    ctx.lineTo(startX, y + w * 0.4);
+    ctx.fill();
+
+    ctx.restore();
+  } else if (type === "trail_hazard") {
+    const x1 = (params.x1 ?? params.x) * W;
+    const y1 = (params.y1 ?? params.y) * H;
+    const x2 = (params.x2 ?? params.x) * W;
+    const y2 = (params.y2 ?? params.y) * H;
+    const isCyan = params.side === "right";
+    const color = isCyan ? "rgba(77, 248, 255, 0.4)" : "rgba(255, 77, 166, 0.4)";
+    ctx.save();
+    ctx.strokeStyle = color;
+    ctx.setLineDash([6, 5]);
+    ctx.lineWidth = 2.0;
+    ctx.beginPath();
+    ctx.moveTo(x1, y1);
+    ctx.lineTo(x2, y2);
+    ctx.stroke();
+    ctx.restore();
   }
 }
 
@@ -329,7 +471,7 @@ function renderActiveShape(ctx, ev, progress, style, W, H) {
   const { type, params } = ev;
 
   if (type === "laser") {
-    const w = params.width || 0.05;
+    const w = params.width || 0.028;
     if (params.direction === "horizontal") {
       ctx.fillRect(0, (params.y - w / 2) * H, W, w * H);
       // 코어 백색 라인
@@ -533,6 +675,93 @@ function renderActiveShape(ctx, ev, progress, style, W, H) {
     ctx.globalAlpha = fade;
     ctx.beginPath();
     ctx.arc(ox, oy, beamW * 0.7, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.restore();
+  } else if (type === "melody_bolt") {
+    // 멜로디 굵은 가로 네온 탄환 (시작점에서 목표점까지 이동)
+    const startX = (params.startX ?? 0) * W;
+    const targetX = (params.targetX ?? (params.startX === 0 ? 0.7 : 0.3)) * W;
+    const curX = startX + (targetX - startX) * progress;
+    const y = params.y * H;
+    const w = (params.width || 0.055) * H;
+    const len = Math.max(50, W * 0.085);
+    const dir = targetX > startX ? 1 : -1;
+
+    ctx.save();
+    ctx.translate(curX, y);
+
+    // 1. 발광 트레일 (꼬리 잔상)
+    const trailLen = len * 1.5;
+    const trailGrad = ctx.createLinearGradient(-dir * trailLen, 0, 0, 0);
+    trailGrad.addColorStop(0, "rgba(0, 0, 0, 0)");
+    trailGrad.addColorStop(1, style.active);
+    ctx.fillStyle = trailGrad;
+    ctx.beginPath();
+    ctx.fillRect(-dir * trailLen, -w * 0.35, trailLen, w * 0.7);
+
+    // 2. 굵직한 탄환 본체 (글로우 외곽 캡슐)
+    ctx.fillStyle = style.active;
+    ctx.beginPath();
+    if (ctx.roundRect) {
+      ctx.roundRect(-len / 2, -w / 2, len, w, w / 2);
+    } else {
+      ctx.rect(-len / 2, -w / 2, len, w);
+    }
+    ctx.fill();
+
+    // 3. 고에너지 코어 (백색 중심부)
+    ctx.fillStyle = style.activeCore;
+    ctx.beginPath();
+    if (ctx.roundRect) {
+      ctx.roundRect(-len * 0.38, -w * 0.22, len * 0.76, w * 0.44, w * 0.22);
+    } else {
+      ctx.rect(-len * 0.38, -w * 0.22, len * 0.76, w * 0.44);
+    }
+    ctx.fill();
+
+    // 4. 탄환 앞머리 플라즈마 헤드
+    ctx.beginPath();
+    ctx.arc(dir * (len / 2 - 3), 0, w * 0.38, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.restore();
+  } else if (type === "trail_hazard") {
+    // 이동 잔상/위험 영역: 이동 경로를 잇는 번개/네온 에너지 띠
+    const x1 = (params.x1 ?? params.x) * W;
+    const y1 = (params.y1 ?? params.y) * H;
+    const x2 = (params.x2 ?? params.x) * W;
+    const y2 = (params.y2 ?? params.y) * H;
+    const isCyan = params.side === "right";
+    const glowColor = isCyan ? "#4df8ff" : "#ff4da6";
+    const fade = Math.max(0, 1 - progress);
+    const trailW = Math.max(3, (params.width || 0.024) * W * (1 - progress * 0.35));
+
+    ctx.save();
+    ctx.globalAlpha *= fade;
+    ctx.shadowColor = glowColor;
+    ctx.shadowBlur = 16 * fade;
+    ctx.strokeStyle = glowColor;
+    ctx.lineWidth = trailW;
+    ctx.lineCap = "round";
+    ctx.beginPath();
+    ctx.moveTo(x1, y1);
+    ctx.lineTo(x2, y2);
+    ctx.stroke();
+
+    // 뜨거운 백색 코어 라인
+    ctx.strokeStyle = "#ffffff";
+    ctx.lineWidth = trailW * 0.38;
+    ctx.beginPath();
+    ctx.moveTo(x1, y1);
+    ctx.lineTo(x2, y2);
+    ctx.stroke();
+
+    // 양 끝 잔상 에너지 스파크
+    ctx.fillStyle = "#ffffff";
+    ctx.beginPath();
+    ctx.arc(x1, y1, trailW * 0.45, 0, Math.PI * 2);
+    ctx.arc(x2, y2, trailW * 0.45, 0, Math.PI * 2);
     ctx.fill();
 
     ctx.restore();

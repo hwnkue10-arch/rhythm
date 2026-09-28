@@ -1,0 +1,1157 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <title>Audio Analysis Visualizer & Inspector</title>
+  <style>
+    body { background: #111; color: #fff; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; display: flex; flex-direction: column; align-items: center; padding: 20px; margin: 0; }
+    h1 { margin-bottom: 5px; font-size: 24px; letter-spacing: -0.5px; }
+    .controls { display: flex; flex-direction: column; align-items: center; width: 100%; max-width: 1000px; }
+    audio { margin: 15px 0; width: 100%; max-width: 800px; }
+    #status { color: #aaa; margin-bottom: 10px; font-size: 14px; }
+    #timeDisplay { font-size: 32px; font-family: monospace; font-weight: bold; color: #00ffcc; margin-bottom: 10px; letter-spacing: 2px; }
+    
+    .boxes { display: flex; gap: 15px; margin-bottom: 20px; flex-wrap: wrap; justify-content: center; }
+    .box { width: 100px; height: 100px; border: 2px solid #333; border-radius: 10px; display: flex; flex-direction: column; align-items: center; justify-content: center; font-size: 16px; font-weight: bold; transition: all 0.05s ease-out; background: #222; text-align: center; line-height: 1.2; position: relative; user-select: none; }
+    .box small { font-size: 11px; opacity: 0.7; margin-top: 5px; font-weight: normal; }
+    .hotkey { position: absolute; top: 5px; left: 5px; background: #444; border-radius: 4px; padding: 2px 6px; font-size: 10px; }
+    
+    .box.active { transform: scale(1.1); }
+    .box[data-inst="kick"].active { background: #ff0055; box-shadow: 0 0 20px #ff0055; color: white; border-color: #ff0055; }
+    .box[data-inst="snare"].active { background: #00ffcc; box-shadow: 0 0 20px #00ffcc; color: black; border-color: #00ffcc; }
+    .box[data-inst="melody"].active { background: #ffaa00; box-shadow: 0 0 20px #ffaa00; color: black; border-color: #ffaa00; }
+    .box[data-inst="hihat"].active { background: #aaaaaa; box-shadow: 0 0 15px #aaaaaa; color: black; border-color: #aaaaaa; }
+    .box[data-inst="drop"].active { background: #ff00ff; box-shadow: 0 0 30px #ff00ff; color: white; border-color: #ff00ff; }
+
+    #phase { font-size: 20px; font-weight: bold; color: #ff00ff; margin-bottom: 10px; text-transform: uppercase; letter-spacing: 2px; height: 24px; }
+    #phase.predrop { color: #fff; text-shadow: 0 0 10px #ff00ff; animation: pulse 0.5s infinite alternate; }
+    
+    #graph-container { width: 100%; max-width: 1000px; position: relative; margin-bottom: 20px; }
+    canvas { width: 100%; height: 300px; background: #1a1a1a; border: 1px solid #444; border-radius: 8px; display: block; cursor: pointer; }
+    .graph-labels { position: absolute; left: 10px; top: 0; bottom: 0; display: flex; flex-direction: column; justify-content: space-around; pointer-events: none; }
+    .graph-label { font-size: 12px; font-weight: bold; opacity: 0.8; text-shadow: 1px 1px 2px black; }
+
+    /* 데이터 추출 및 검증 패널 */
+    .export-panel { background: #1c1c20; border: 1px solid #333; padding: 20px; border-radius: 12px; width: 100%; max-width: 1000px; box-sizing: border-box; box-shadow: 0 6px 24px rgba(0,0,0,0.5); }
+    .panel-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; border-bottom: 1px solid #2d2d35; padding-bottom: 12px; }
+    .panel-header h3 { margin: 0; font-size: 18px; color: #00ffcc; display: flex; align-items: center; gap: 8px; }
+    #copyToast { display: none; color: #00ffcc; font-size: 13px; font-weight: bold; background: rgba(0,255,204,0.15); border: 1px solid #00ffcc; padding: 4px 10px; border-radius: 4px; }
+
+    .stats-bar { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
+    .stat-badge { background: #26262d; border: 1px solid #3c3c46; border-radius: 6px; padding: 6px 12px; font-size: 12px; display: flex; gap: 6px; align-items: center; }
+    .stat-badge b { color: #fff; font-family: monospace; font-size: 13px; }
+    .stat-badge[data-inst="kick"] b { color: #ff0055; }
+    .stat-badge[data-inst="snare"] b { color: #00ffcc; }
+    .stat-badge[data-inst="melody"] b { color: #ffaa00; }
+    .stat-badge[data-inst="hihat"] b { color: #aaaaaa; }
+    .stat-badge[data-inst="drop"] b { color: #ff00ff; }
+
+    .control-row { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; font-size: 13px; }
+    .control-group { display: flex; align-items: center; gap: 8px; }
+    .control-group label { color: #bbb; font-weight: 500; font-size: 13px; }
+
+    .filter-btn-group { display: flex; background: #131316; border-radius: 6px; padding: 3px; border: 1px solid #333; gap: 2px; }
+    .filter-btn { background: transparent; border: none; color: #888; padding: 5px 10px; border-radius: 4px; font-size: 12px; cursor: pointer; transition: all 0.15s; font-weight: 500; }
+    .filter-btn:hover { color: #fff; background: rgba(255,255,255,0.06); }
+    .filter-btn.active { background: #00ffcc; color: #000; font-weight: bold; }
+    .filter-btn[data-inst="kick"].active { background: #ff0055; color: #fff; }
+    .filter-btn[data-inst="snare"].active { background: #00ffcc; color: #000; }
+    .filter-btn[data-inst="melody"].active { background: #ffaa00; color: #000; }
+    .filter-btn[data-inst="hihat"].active { background: #aaaaaa; color: #000; }
+    .filter-btn[data-inst="drop"].active { background: #ff00ff; color: #fff; }
+    .filter-btn[data-inst="phases"].active { background: #3b82f6; color: #fff; }
+
+    .time-input { width: 75px; background: #131316; border: 1px solid #444; color: #00ffcc; font-family: monospace; font-size: 13px; padding: 5px 8px; border-radius: 4px; text-align: center; outline: none; }
+    .time-input:focus { border-color: #00ffcc; }
+    .preset-btn { background: #26262e; border: 1px solid #444; color: #ccc; padding: 5px 9px; font-size: 11px; border-radius: 4px; cursor: pointer; transition: all 0.15s; }
+    .preset-btn:hover { background: #3c3c46; color: #fff; border-color: #666; }
+
+    select.format-select { background: #131316; border: 1px solid #444; color: #fff; padding: 6px 10px; border-radius: 4px; font-size: 12px; cursor: pointer; outline: none; }
+    select.format-select:focus { border-color: #00ffcc; }
+
+    .btn-main { background: #00ffcc; color: #000; border: none; padding: 8px 16px; font-weight: bold; cursor: pointer; border-radius: 6px; font-size: 13px; display: inline-flex; align-items: center; gap: 6px; transition: transform 0.1s, background 0.15s; }
+    .btn-main:hover { background: #33ffdd; transform: translateY(-1px); }
+    .btn-main:active { transform: translateY(0); }
+
+    .btn-sub { background: #2a2a32; color: #eee; border: 1px solid #444; padding: 7px 13px; font-size: 12px; cursor: pointer; border-radius: 6px; transition: all 0.15s; }
+    .btn-sub:hover { background: #3c3c46; color: #fff; border-color: #666; }
+
+    .action-row { display: flex; justify-content: space-between; align-items: center; margin-top: 14px; margin-bottom: 8px; }
+    .output-info { font-size: 12px; color: #00ffcc; font-family: monospace; font-weight: bold; }
+    #dataOutput { width: 100%; height: 220px; background: #0c0c0f; color: #2fff7e; font-family: 'Consolas', 'Courier New', monospace; font-size: 12px; line-height: 1.5; padding: 12px; box-sizing: border-box; border: 1px solid #333; border-radius: 6px; resize: vertical; outline: none; white-space: pre; }
+
+    @keyframes pulse { from { opacity: 0.5; } to { opacity: 1; } }
+  </style>
+</head>
+<body>
+  <h1>Audio Analysis Visualizer & Inspector</h1>
+  <div id="status">서버에서 타임라인 데이터를 가져오는 중...</div>
+  
+  <div id="timeDisplay">0.000 s</div>
+  
+  <audio id="player" controls src="/assets/Through_The_Obsidian_Grid.mp3"></audio>
+
+  <div id="phase">PHASE: WAITING...</div>
+
+  <div id="graph-container">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; font-size: 12px; color: #aaa;">
+      <div style="display: flex; gap: 12px; align-items: center;">
+        <span style="font-weight: bold; color: #fff;">📈 실시간 타임라인 뷰포트</span>
+        <label style="display: flex; align-items: center; gap: 5px; cursor: pointer;">
+          <input type="checkbox" id="showRejectedKicksCheck" style="cursor: pointer;">
+          <span style="color: #ff8888;">탈락된 킥(rejected) 표시</span>
+        </label>
+        <label style="display: flex; align-items: center; gap: 5px; cursor: pointer;">
+          <input type="checkbox" id="syncFilterCanvasCheck" checked style="cursor: pointer;">
+          <span>악기 필터 캔버스 연동</span>
+        </label>
+      </div>
+      <div style="display: flex; gap: 6px; align-items: center;">
+        <span>뷰포트 범위:</span>
+        <button class="preset-btn" id="zoom5sBtn">5초</button>
+        <button class="preset-btn" id="zoom10sBtn" style="border-color: #00ffcc; color: #00ffcc;">10초</button>
+        <button class="preset-btn" id="zoom16sBtn">16초</button>
+      </div>
+    </div>
+    <canvas id="timelineCanvas" width="1000" height="300" title="클릭한 시간으로 즉시 이동합니다"></canvas>
+  </div>
+
+  <div class="boxes">
+    <div class="box" data-inst="kick"><span class="hotkey">1</span>KICK<br><small>(메인 비트)</small></div>
+    <div class="box" data-inst="snare"><span class="hotkey">2</span>SYNTH<br><small>(화음/지속음)</small></div>
+    <div class="box" data-inst="melody"><span class="hotkey">3</span>MELODY<br><small>(조준/탄막)</small></div>
+    <div class="box" data-inst="hihat"><span class="hotkey">4</span>HIHAT<br><small>(스윕/이동)</small></div>
+    <div class="box" data-inst="drop"><span class="hotkey">5</span>DROP<br><small>(거대 압살)</small></div>
+  </div>
+
+  <!-- 분석 데이터 추출 및 검증기 -->
+  <div class="export-panel">
+    <div class="panel-header">
+      <h3>📊 분석 데이터 추출 & 검증기 (Analysis Data Exporter)</h3>
+      <div id="copyToast">✅ 클립보드에 복사되었습니다!</div>
+    </div>
+
+    <!-- 전체 통계 요약 배지 -->
+    <div class="stats-bar" id="statsBar">
+      <div class="stat-badge">전체 길이: <b id="statDuration">-</b></div>
+      <div class="stat-badge" data-inst="kick">KICK: <b id="statKick">0</b></div>
+      <div class="stat-badge" data-inst="snare">SYNTH: <b id="statSnare">0</b></div>
+      <div class="stat-badge" data-inst="melody">MELODY: <b id="statMelody">0</b></div>
+      <div class="stat-badge" data-inst="hihat">HIHAT: <b id="statHihat">0</b></div>
+      <div class="stat-badge" data-inst="drop">DROP: <b id="statDrop">0</b></div>
+      <div class="stat-badge">PHASES: <b id="statPhases">0</b></div>
+    </div>
+
+    <!-- 1행: 악기 필터 및 소스 선택 -->
+    <div class="control-row">
+      <div class="control-group">
+        <label>악기 필터:</label>
+        <div class="filter-btn-group" id="instFilterGroup">
+          <button class="filter-btn active" data-inst="all">전체 (All)</button>
+          <button class="filter-btn" data-inst="kick">KICK</button>
+          <button class="filter-btn" data-inst="snare">SYNTH</button>
+          <button class="filter-btn" data-inst="melody">MELODY</button>
+          <button class="filter-btn" data-inst="hihat">HIHAT</button>
+          <button class="filter-btn" data-inst="drop">DROP</button>
+          <button class="filter-btn" data-inst="phases">PHASES</button>
+        </div>
+      </div>
+      <div class="control-group" style="margin-left:auto;">
+        <label>데이터 소스:</label>
+        <select id="sourceSelect" class="format-select">
+          <option value="rawOnsets" selected>원시 감지 Onsets (rawOnsets - 분석 검증용)</option>
+          <option value="events">최종 게임 이벤트 (events)</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- 2행: 시간 구간 설정 & 퀵 프리셋 -->
+    <div class="control-row">
+      <div class="control-group">
+        <label>시간 구간(초):</label>
+        <input type="number" id="startTimeInput" class="time-input" value="0" step="0.1" min="0">
+        <span style="color:#777;">~</span>
+        <input type="number" id="endTimeInput" class="time-input" value="999" step="0.1" min="0">
+      </div>
+      <div class="control-group">
+        <button class="preset-btn" id="presetAllBtn">전체 곡</button>
+        <button class="preset-btn" id="presetCurrent3Btn">현재 위치 ±3초</button>
+        <button class="preset-btn" id="presetCurrent5Btn">현재 위치 ±5초</button>
+        <button class="preset-btn" id="presetKick1Btn" title="45s 부근 Kick 검증">테스트1 (40s~50s)</button>
+        <button class="preset-btn" id="presetKick2Btn" title="1분 45초 부근 Kick 검증">테스트2 (100s~110s)</button>
+      </div>
+    </div>
+
+    <!-- 3행: 출력 포맷 및 액션 버튼 -->
+    <div class="control-row" style="margin-bottom: 4px;">
+      <div class="control-group">
+        <label>출력 형식:</label>
+        <select id="formatSelect" class="format-select">
+          <option value="summary_list" selected>1. 텍스트 요약 리스트 (시간, 악기, 에너지, 박자) [복사 추천]</option>
+          <option value="timestamps">2. 순수 타임스탬프 배열 ([t1, t2, ...])</option>
+          <option value="report">3. 종합 분석 검증 리포트 (통계 & 밀도 & 페이즈)</option>
+          <option value="json">4. JSON 상세 데이터</option>
+        </select>
+      </div>
+      <div class="control-group" style="margin-left:auto; gap: 8px;">
+        <button class="btn-main" id="copyBtn">📋 클립보드 복사</button>
+        <button class="btn-sub" id="refreshBtn">🔄 새로고침</button>
+        <button class="btn-sub" id="downloadBtn">💾 파일 저장</button>
+      </div>
+    </div>
+
+    <div class="action-row">
+      <span class="output-info" id="outputInfo">데이터를 불러오는 중...</span>
+      <span style="font-size: 11px; color: #777;">💡 팁: 그래프 캔버스를 클릭하면 해당 시간대로 바로 이동합니다.</span>
+    </div>
+
+    <textarea id="dataOutput" readonly placeholder="추출된 분석 데이터가 여기에 표시됩니다..."></textarea>
+  </div>
+
+  <script>
+    const statusEl = document.getElementById('status');
+    const timeDisplay = document.getElementById('timeDisplay');
+    const player = document.getElementById('player');
+    const phaseEl = document.getElementById('phase');
+    const canvas = document.getElementById('timelineCanvas');
+    const ctx = canvas.getContext('2d');
+    const dataOutput = document.getElementById('dataOutput');
+    const outputInfo = document.getElementById('outputInfo');
+    const copyToast = document.getElementById('copyToast');
+
+    const boxes = {
+      kick: document.querySelector('.box[data-inst="kick"]'),
+      snare: document.querySelector('.box[data-inst="snare"]'),
+      melody: document.querySelector('.box[data-inst="melody"]'),
+      hihat: document.querySelector('.box[data-inst="hihat"]'),
+      drop: document.querySelector('.box[data-inst="drop"]')
+    };
+
+    const instConfigs = {
+      drop:   { y: 35,  label: "DROP",   color: "#ff00ff", desc: "드랍 폭발" },
+      kick:   { y: 95,  label: "KICK",   color: "#ff0055", desc: "메인 킥" },
+      snare:  { y: 155, label: "SYNTH",  color: "#00ffcc", desc: "신스/화음" },
+      melody: { y: 215, label: "MELODY", color: "#ffaa00", desc: "멜로디" },
+      hihat:  { y: 265, label: "HIHAT",  color: "#aaaaaa", desc: "하이햇" }
+    };
+
+    const instColors = { drop: "#ff00ff", kick: "#ff0055", snare: "#00ffcc", melody: "#ffaa00", hihat: "#aaaaaa" };
+    const instY = { drop: 35, kick: 95, snare: 155, melody: 215, hihat: 265 };
+    const phaseColors = {
+      intro: "rgba(100, 110, 130, 0.18)",
+      groove: "rgba(0, 180, 255, 0.18)",
+      build: "rgba(255, 140, 0, 0.22)",
+      build_1: "rgba(255, 140, 0, 0.20)",
+      build_2: "rgba(255, 60, 0, 0.28)",
+      drop: "rgba(255, 0, 255, 0.25)",
+      break: "rgba(0, 0, 0, 0.55)",
+      finale: "rgba(160, 100, 255, 0.20)"
+    };
+
+    let timeline = null;
+    let nextEventIdx = 0;
+    const flashTimeouts = {};
+
+    // 뷰포트 설정: 과거 2초 ~ 미래 8초 (총 10초 기본)
+    let TIME_WINDOW_PAST = 2.0;
+    let TIME_WINDOW_FUTURE = 8.0;
+    let TIME_WINDOW_TOTAL = TIME_WINDOW_PAST + TIME_WINDOW_FUTURE;
+
+    let currentInstFilter = 'all';
+
+    // 뷰포트 확대/축소 버튼
+    function setViewportWindow(past, future) {
+      TIME_WINDOW_PAST = past;
+      TIME_WINDOW_FUTURE = future;
+      TIME_WINDOW_TOTAL = past + future;
+      document.getElementById('zoom5sBtn').style.borderColor = (future === 4.0) ? '#00ffcc' : '#444';
+      document.getElementById('zoom5sBtn').style.color = (future === 4.0) ? '#00ffcc' : '#ccc';
+      document.getElementById('zoom10sBtn').style.borderColor = (future === 8.0) ? '#00ffcc' : '#444';
+      document.getElementById('zoom10sBtn').style.color = (future === 8.0) ? '#00ffcc' : '#ccc';
+      document.getElementById('zoom16sBtn').style.borderColor = (future === 13.0) ? '#00ffcc' : '#444';
+      document.getElementById('zoom16sBtn').style.color = (future === 13.0) ? '#00ffcc' : '#ccc';
+    }
+
+    document.getElementById('zoom5sBtn').addEventListener('click', () => setViewportWindow(1.0, 4.0));
+    document.getElementById('zoom10sBtn').addEventListener('click', () => setViewportWindow(2.0, 8.0));
+    document.getElementById('zoom16sBtn').addEventListener('click', () => setViewportWindow(3.0, 13.0));
+
+    async function init() {
+      try {
+        const res = await fetch('/api/analyze-test');
+        if (!res.ok) throw new Error("분석 데이터를 가져오지 못했습니다.");
+        timeline = await res.json();
+        statusEl.innerText = "분석 완료! 곡 데이터가 정상 로드되었습니다.";
+        updateStatsBadges();
+      } catch (e) {
+        statusEl.innerText = "에러: " + e.message;
+        dataOutput.value = "에러: " + e.message;
+      }
+    }
+    init();
+
+    player.addEventListener('seeked', () => {
+      if (!timeline) return;
+      const sourceKey = document.getElementById('sourceSelect').value;
+      const sourceEvents = (sourceKey === 'events' ? timeline.events : timeline.rawOnsets) || [];
+      nextEventIdx = sourceEvents.findIndex(e => e.t >= player.currentTime);
+      if (nextEventIdx === -1) nextEventIdx = sourceEvents.length;
+    });
+
+    // 캔버스 클릭 시 해당 시간으로 즉시 탐색(Seek)
+    canvas.addEventListener('click', (e) => {
+      if (!timeline) return;
+      const rect = canvas.getBoundingClientRect();
+      const clickX = e.clientX - rect.left;
+      const viewStart = player.currentTime - TIME_WINDOW_PAST;
+      const targetTime = viewStart + (clickX / rect.width) * TIME_WINDOW_TOTAL;
+      player.currentTime = Math.max(0, Math.min(timeline.durationSec || player.duration || 999, targetTime));
+    });
+
+    // 통계 배지 업데이트
+    function updateStatsBadges() {
+      if (!timeline) return;
+      const onsets = timeline.rawOnsets || timeline.events || [];
+      const kickCount = onsets.filter(o => o.instrument === 'kick').length;
+      const rejectedCount = onsets.filter(o => o.instrument === 'rejected_kick').length;
+      const snareCount = onsets.filter(o => o.instrument === 'snare').length;
+      const melodyCount = onsets.filter(o => o.instrument === 'melody').length;
+      const hihatCount = onsets.filter(o => o.instrument === 'hihat').length;
+      const dropCount = onsets.filter(o => o.instrument === 'drop').length;
+      
+      document.getElementById('statDuration').innerText = (timeline.durationSec || 0).toFixed(1) + 's';
+      document.getElementById('statKick').innerHTML = `${kickCount} <small style="font-weight:normal;opacity:0.7;">(탈락 ${rejectedCount})</small>`;
+      document.getElementById('statSnare').innerText = snareCount;
+      document.getElementById('statMelody').innerText = melodyCount;
+      document.getElementById('statHihat').innerText = hihatCount;
+      document.getElementById('statDrop').innerText = dropCount;
+      document.getElementById('statPhases').innerText = (timeline.phases ? timeline.phases.length : 0);
+      
+      document.getElementById('endTimeInput').value = Math.ceil(timeline.durationSec || 215);
+      updateExportData();
+    }
+
+    // 분석 데이터 추출 로직
+    function updateExportData() {
+      if (!timeline) {
+        dataOutput.value = "분석 데이터를 불러오는 중입니다...";
+        return;
+      }
+
+      const sourceKey = document.getElementById('sourceSelect').value;
+      const format = document.getElementById('formatSelect').value;
+      let startTime = parseFloat(document.getElementById('startTimeInput').value);
+      let endTime = parseFloat(document.getElementById('endTimeInput').value);
+
+      if (isNaN(startTime)) startTime = 0;
+      if (isNaN(endTime)) endTime = timeline.durationSec || 999;
+      if (startTime > endTime) {
+        const tmp = startTime; startTime = endTime; endTime = tmp;
+      }
+
+      // 1. 페이즈(Phases) 필터
+      if (currentInstFilter === 'phases') {
+        const phases = (timeline.phases || []).filter(p => p.endTime >= startTime && p.startTime <= endTime);
+        outputInfo.innerText = `조회 결과: Phase ${phases.length}개 구간 (${startTime.toFixed(1)}s ~ ${endTime.toFixed(1)}s)`;
+        
+        if (format === 'json') {
+          dataOutput.value = JSON.stringify(phases, null, 2);
+        } else if (format === 'timestamps') {
+          dataOutput.value = JSON.stringify(phases.map(p => ({ phase: p.phase, start: p.startTime, end: p.endTime })), null, 2);
+        } else {
+          let text = `=== [페이즈(Phase) 분석 데이터] ===\n구간: ${startTime.toFixed(2)}s ~ ${endTime.toFixed(2)}s (총 ${phases.length}개)\n\n`;
+          phases.forEach((p, idx) => {
+            text += `[#${idx + 1}] ${p.phase.toUpperCase().padEnd(7)} | ${p.startTime.toFixed(3)}s ~ ${p.endTime.toFixed(3)}s (길이: ${(p.endTime - p.startTime).toFixed(2)}s)`;
+            if (p.dropIntensity !== undefined) text += ` | dropIntensity: ${p.dropIntensity.toFixed(2)}`;
+            if (p.preDropGapDuration) text += ` | preDropGap: ${p.preDropGapDuration.toFixed(2)}s`;
+            text += '\n';
+          });
+          dataOutput.value = text;
+        }
+        return;
+      }
+
+      // 2. Onsets / Events 필터
+      const rawList = (sourceKey === 'events' ? timeline.events : timeline.rawOnsets) || [];
+      const showRejected = document.getElementById('showRejectedKicksCheck').checked;
+      
+      const filtered = rawList.filter(item => {
+        if (item.t < startTime || item.t > endTime) return false;
+        if (item.instrument === 'rejected_kick' && !showRejected) return false;
+        if (currentInstFilter !== 'all') {
+          if (item.instrument !== currentInstFilter) return false;
+        }
+        return true;
+      });
+
+      outputInfo.innerText = `조회 결과: 총 ${filtered.length}건 (${sourceKey === 'events' ? 'Events' : 'RawOnsets'}, ${currentInstFilter.toUpperCase()}, ${startTime.toFixed(1)}s ~ ${endTime.toFixed(1)}s)`;
+
+      if (format === 'json') {
+        dataOutput.value = JSON.stringify(filtered, null, 2);
+      } else if (format === 'timestamps') {
+        const ts = filtered.map(item => parseFloat(item.t.toFixed(3)));
+        dataOutput.value = `// [${currentInstFilter.toUpperCase()}] 총 ${ts.length}개 타임스탬프 (구간: ${startTime.toFixed(1)}s ~ ${endTime.toFixed(1)}s)\n` + JSON.stringify(ts);
+      } else if (format === 'report') {
+        const allOnsets = (timeline.rawOnsets || []).filter(o => o.instrument !== 'rejected_kick');
+        const kickAll = allOnsets.filter(o => o.instrument === 'kick').length;
+        const snareAll = allOnsets.filter(o => o.instrument === 'snare').length;
+        const melodyAll = allOnsets.filter(o => o.instrument === 'melody').length;
+        const hihatAll = allOnsets.filter(o => o.instrument === 'hihat').length;
+        const dropAll = allOnsets.filter(o => o.instrument === 'drop').length;
+
+        const dur = Math.max(0.1, endTime - startTime);
+        const density = (filtered.length / dur).toFixed(2);
+
+        let report = `=================================================\n`;
+        report += `🎵 곡 분석 종합 검증 리포트\n`;
+        report += `=================================================\n`;
+        report += `• 전체 곡 길이: ${(timeline.durationSec || 0).toFixed(1)}초\n`;
+        report += `• 전체 유효 온셋 총계: ${allOnsets.length}개 (Kick: ${kickAll}, Synth: ${snareAll}, Melody: ${melodyAll}, Hihat: ${hihatAll}, Drop: ${dropAll})\n`;
+        report += `-------------------------------------------------\n`;
+        report += `[선택 구간 요약: ${startTime.toFixed(2)}s ~ ${endTime.toFixed(2)}s (길이: ${dur.toFixed(2)}s)]\n`;
+        report += `• 필터 악기: ${currentInstFilter.toUpperCase()} (${sourceKey})\n`;
+        report += `• 구간 내 검출 수: ${filtered.length}개 (초당 평균 밀도: ${density}개/s)\n`;
+        
+        const currentPhases = (timeline.phases || []).filter(p => p.endTime >= startTime && p.startTime <= endTime);
+        if (currentPhases.length > 0) {
+          report += `• 구간 내 포함된 페이즈:\n`;
+          currentPhases.forEach(p => {
+            report += `  - [${p.phase.toUpperCase()}] ${p.startTime.toFixed(2)}s ~ ${p.endTime.toFixed(2)}s\n`;
+          });
+        }
+
+        report += `-------------------------------------------------\n`;
+        report += `[구간 상세 온셋 목록 (최대 120개 표시)]:\n`;
+        const slice = filtered.slice(0, 120);
+        slice.forEach((item, idx) => {
+          let line = `• ${item.t.toFixed(3)}s | [${item.instrument.toUpperCase().padEnd(6)}] | energy: ${(item.energy ?? 0).toFixed(2)}`;
+          if (item.accent) line += ` | accent: ${item.accent}`;
+          if (item.beatPosition !== undefined) line += ` | beatPos: ${item.beatPosition}`;
+          const hold = item.holdDuration || item.duration || (item.instrument === 'snare' ? item.activeDuration : 0);
+          if (hold) line += ` | hold: ${hold.toFixed(2)}s`;
+          if (item.pitch !== undefined) {
+            const pVal = item.pitch <= 1.0 ? `${Math.round(item.pitch * 100)}%` : `${item.pitch.toFixed(1)}Hz`;
+            line += ` | pitch: ${pVal}`;
+            if (item.pitchDirection) line += ` (${item.pitchDirection})`;
+            if (item.pitchDelta) line += ` [${item.pitchDelta > 0 ? '+' : ''}${Math.round(item.pitchDelta * 100)}%]`;
+          }
+          report += line + '\n';
+        });
+        if (filtered.length > 120) {
+          report += `... 외 ${filtered.length - 120}개 생략 (전체를 보려면 출력 형식을 '텍스트 요약 리스트'로 변경하세요)\n`;
+        }
+        dataOutput.value = report;
+      } else {
+        // summary_list (기본 추천 포맷)
+        let text = `=== [분석 데이터 추출: ${currentInstFilter.toUpperCase()}] ===\n`;
+        text += `구간: ${startTime.toFixed(2)}s ~ ${endTime.toFixed(2)}s | 소스: ${sourceKey} | 총 ${filtered.length}개\n\n`;
+        filtered.forEach((item, idx) => {
+          let line = `[${String(idx + 1).padStart(3, ' ')}] ${item.t.toFixed(3)}s | ${item.instrument.toUpperCase().padEnd(6)}`;
+          if (item.energy !== undefined) line += ` | energy: ${item.energy.toFixed(3)}`;
+          if (item.band) line += ` | band: ${item.band}`;
+          if (item.accent) line += ` | accent: ${item.accent}`;
+          if (item.beatPosition !== undefined) line += ` | beat: ${item.beatPosition}`;
+          if (item.syncConfidence) line += ` | sync: ${item.syncConfidence}`;
+          if (item.density) line += ` | density: ${item.density}`;
+          const hold = item.holdDuration || item.duration || (item.instrument === 'snare' ? item.activeDuration : 0);
+          if (hold) line += ` | hold: ${hold.toFixed(3)}s`;
+          if (item.pitch !== undefined) {
+            const pVal = item.pitch <= 1.0 ? `${Math.round(item.pitch * 100)}%` : `${item.pitch.toFixed(1)}Hz`;
+            line += ` | pitch: ${pVal}`;
+            if (item.pitchDirection) line += ` (${item.pitchDirection})`;
+            if (item.pitchDelta) line += ` [${item.pitchDelta > 0 ? '+' : ''}${Math.round(item.pitchDelta * 100)}%]`;
+          }
+          text += line + '\n';
+        });
+        if (filtered.length === 0) {
+          text += `(해당 구간 및 조건에 맞는 데이터가 없습니다.)\n`;
+        }
+        dataOutput.value = text;
+      }
+    }
+
+    // 악기 필터 변경 핸들러
+    function setInstFilter(inst) {
+      currentInstFilter = inst;
+      document.querySelectorAll('#instFilterGroup .filter-btn').forEach(btn => {
+        if (btn.getAttribute('data-inst') === inst) {
+          btn.classList.add('active');
+        } else {
+          btn.classList.remove('active');
+        }
+      });
+      updateExportData();
+    }
+
+    document.querySelectorAll('#instFilterGroup .filter-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        setInstFilter(btn.getAttribute('data-inst'));
+      });
+    });
+
+    // 퀵 프리셋 버튼 이벤트
+    document.getElementById('presetAllBtn').addEventListener('click', () => {
+      document.getElementById('startTimeInput').value = '0';
+      document.getElementById('endTimeInput').value = Math.ceil(timeline?.durationSec || 215);
+      updateExportData();
+    });
+
+    document.getElementById('presetCurrent3Btn').addEventListener('click', () => {
+      const cur = player.currentTime;
+      document.getElementById('startTimeInput').value = Math.max(0, cur - 3).toFixed(1);
+      document.getElementById('endTimeInput').value = (cur + 3).toFixed(1);
+      updateExportData();
+    });
+
+    document.getElementById('presetCurrent5Btn').addEventListener('click', () => {
+      const cur = player.currentTime;
+      document.getElementById('startTimeInput').value = Math.max(0, cur - 5).toFixed(1);
+      document.getElementById('endTimeInput').value = (cur + 5).toFixed(1);
+      updateExportData();
+    });
+
+    document.getElementById('presetKick1Btn').addEventListener('click', () => {
+      document.getElementById('startTimeInput').value = '40.0';
+      document.getElementById('endTimeInput').value = '50.0';
+      setInstFilter('kick');
+    });
+
+    document.getElementById('presetKick2Btn').addEventListener('click', () => {
+      document.getElementById('startTimeInput').value = '100.0';
+      document.getElementById('endTimeInput').value = '110.0';
+      setInstFilter('kick');
+    });
+
+    document.getElementById('sourceSelect').addEventListener('change', () => {
+      updateExportData();
+      player.dispatchEvent(new Event('seeked'));
+    });
+    document.getElementById('formatSelect').addEventListener('change', updateExportData);
+    document.getElementById('startTimeInput').addEventListener('input', updateExportData);
+    document.getElementById('endTimeInput').addEventListener('input', updateExportData);
+    document.getElementById('refreshBtn').addEventListener('click', updateExportData);
+    document.getElementById('showRejectedKicksCheck').addEventListener('change', updateExportData);
+
+    // 클립보드 복사
+    document.getElementById('copyBtn').addEventListener('click', () => {
+      if (!dataOutput.value) return;
+      navigator.clipboard.writeText(dataOutput.value).then(() => {
+        copyToast.style.display = 'block';
+        setTimeout(() => { copyToast.style.display = 'none'; }, 2000);
+      }).catch(() => {
+        dataOutput.select();
+        document.execCommand('copy');
+        copyToast.style.display = 'block';
+        setTimeout(() => { copyToast.style.display = 'none'; }, 2000);
+      });
+    });
+
+    // 파일 다운로드
+    document.getElementById('downloadBtn').addEventListener('click', () => {
+      if (!dataOutput.value) return;
+      const format = document.getElementById('formatSelect').value;
+      const isJson = format === 'json' || format === 'timestamps';
+      const blob = new Blob([dataOutput.value], { type: isJson ? 'application/json' : 'text/plain;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `analysis_${currentInstFilter}_${document.getElementById('startTimeInput').value}-${document.getElementById('endTimeInput').value}.${isJson ? 'json' : 'txt'}`;
+      a.click();
+      URL.revokeObjectURL(url);
+    });
+
+    // 키보드 이벤트 (숫자 1~5로 시각적 타격 테스트 - 텍스트 입력창에서는 비활성화)
+    const keyMap = { '1': 'kick', '2': 'snare', '3': 'melody', '4': 'hihat', '5': 'drop' };
+    window.addEventListener('keydown', (e) => {
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+      if (e.repeat) return;
+      const inst = keyMap[e.key];
+      if (inst && boxes[inst]) {
+        boxes[inst].classList.add('active');
+        setTimeout(() => boxes[inst].classList.remove('active'), 120);
+      }
+    });
+
+    function drawGraph(t) {
+      const w = canvas.width;
+      const h = canvas.height;
+      ctx.clearRect(0, 0, w, h);
+      if (!timeline) return;
+
+      const viewStart = t - TIME_WINDOW_PAST;
+      const viewEnd = t + TIME_WINDOW_FUTURE;
+
+      // 1. Phase 배경 렌더링
+      if (timeline.phases) {
+        for (const p of timeline.phases) {
+          if (p.endTime < viewStart || p.startTime > viewEnd) continue;
+          const xStart = Math.max(0, (p.startTime - viewStart) / TIME_WINDOW_TOTAL * w);
+          const xEnd = Math.min(w, (p.endTime - viewStart) / TIME_WINDOW_TOTAL * w);
+          const pColor = phaseColors[p.phase] || "rgba(255,255,255,0.05)";
+          
+          ctx.fillStyle = pColor;
+          ctx.fillRect(xStart, 0, xEnd - xStart, h);
+
+          // 페이즈 구분 세로선
+          ctx.strokeStyle = "rgba(255,255,255,0.25)";
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.moveTo(xStart, 0);
+          ctx.lineTo(xStart, h);
+          ctx.stroke();
+
+          // 페이즈 텍스트 태그
+          if (xStart >= -100 && xStart < w - 40) {
+            ctx.fillStyle = "rgba(255,255,255,0.75)";
+            ctx.font = "bold 11px sans-serif";
+            const labelX = Math.max(75, xStart + 8);
+            ctx.fillText(`[${p.phase.toUpperCase()}]`, labelX, 18);
+          }
+
+          // 프리드랍 구간 표시
+          if (p.preDropGapDuration && p.preDropGapDuration >= 0.4) {
+            const pdStart = p.endTime - p.preDropGapDuration;
+            const pdX0 = Math.max(0, (pdStart - viewStart) / TIME_WINDOW_TOTAL * w);
+            const pdX1 = Math.min(w, (p.endTime - viewStart) / TIME_WINDOW_TOTAL * w);
+            if (pdX1 > pdX0) {
+              ctx.fillStyle = "rgba(0, 0, 0, 0.45)";
+              ctx.fillRect(pdX0, 0, pdX1 - pdX0, h);
+              ctx.fillStyle = "rgba(255, 0, 255, 0.8)";
+              ctx.font = "bold 10px sans-serif";
+              ctx.fillText("PRE-DROP", pdX0 + 4, h - 8);
+            }
+          }
+        }
+      }
+
+      // 2. 시간(초) 눈금 그리드 (1초 단위)
+      const firstSec = Math.floor(viewStart);
+      const lastSec = Math.ceil(viewEnd);
+      ctx.strokeStyle = "rgba(255,255,255,0.07)";
+      ctx.lineWidth = 1;
+      ctx.font = "10px monospace";
+      ctx.fillStyle = "rgba(255,255,255,0.3)";
+      for (let s = firstSec; s <= lastSec; s++) {
+        const sx = ((s - viewStart) / TIME_WINDOW_TOTAL) * w;
+        if (sx >= 0 && sx <= w) {
+          ctx.beginPath();
+          ctx.moveTo(sx, 0);
+          ctx.lineTo(sx, h);
+          ctx.stroke();
+          if (sx > 70) {
+            ctx.fillText(`${s}s`, sx + 3, h - 6);
+          }
+        }
+      }
+
+      // 3. 악기 가로 레인(Track) 및 좌측 HUD 라벨
+      for (const [key, cfg] of Object.entries(instConfigs)) {
+        // 가로 레인 기준선
+        ctx.strokeStyle = "rgba(255,255,255,0.12)";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(0, cfg.y);
+        ctx.lineTo(w, cfg.y);
+        ctx.stroke();
+
+        // SYNTH (화음) 트랙: 상/하 음높이(Pitch) 가이드 레일 점선 및 안내선 표시
+        if (key === 'snare') {
+          ctx.strokeStyle = "rgba(0, 255, 204, 0.15)";
+          ctx.setLineDash([3, 4]);
+          ctx.beginPath();
+          ctx.moveTo(70, cfg.y - 18);
+          ctx.lineTo(w, cfg.y - 18);
+          ctx.moveTo(70, cfg.y + 18);
+          ctx.lineTo(w, cfg.y + 18);
+          ctx.stroke();
+          ctx.setLineDash([]);
+          
+          ctx.fillStyle = "rgba(0, 255, 204, 0.4)";
+          ctx.font = "9px monospace";
+          ctx.fillText("HIGH", 74, cfg.y - 10);
+          ctx.fillText("LOW", 74, cfg.y + 24);
+        }
+
+        // 좌측 라벨 배경 배지
+        ctx.fillStyle = "rgba(20, 20, 26, 0.85)";
+        ctx.fillRect(4, cfg.y - 12, 64, 24);
+        ctx.strokeStyle = cfg.color;
+        ctx.lineWidth = 1.5;
+        ctx.strokeRect(4, cfg.y - 12, 64, 24);
+
+        // 악기 이름
+        ctx.fillStyle = cfg.color;
+        ctx.font = "bold 11px sans-serif";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(cfg.label, 36, cfg.y);
+      }
+      ctx.textAlign = "left";
+      ctx.textBaseline = "alphabetic";
+
+      // 4. 분석된 노트 (서버 데이터)
+      const sourceKey = document.getElementById('sourceSelect').value;
+      const sourceEvents = (sourceKey === 'events' ? timeline.events : timeline.rawOnsets) || [];
+      const showRejected = document.getElementById('showRejectedKicksCheck').checked;
+      const syncFilter = document.getElementById('syncFilterCanvasCheck').checked;
+
+      // 4-A. 화음(SYNTH) 연속 피치 궤적 곡선 (Continuous Pitch Curve) 렌더링
+      const isSnareDimmed = syncFilter && currentInstFilter !== 'all' && currentInstFilter !== 'snare';
+      const visibleSnares = sourceEvents.filter(e => {
+        if (e.instrument !== 'snare') return false;
+        const hold = e.holdDuration || e.duration || e.activeDuration || 0.45;
+        return (e.t + hold >= viewStart - 1.0) && (e.t <= viewEnd + 1.0);
+      });
+
+      if (visibleSnares.length > 0) {
+        const snareCfg = instConfigs['snare'];
+        const baseY = snareCfg.y;
+        
+        ctx.save();
+        if (isSnareDimmed) ctx.globalAlpha = 0.15;
+
+        // 연속 피치 궤적 패스 (Bezier S-커브로 연결된 부드러운 음높이 곡선)
+        ctx.beginPath();
+        let started = false;
+
+        for (let i = 0; i < visibleSnares.length; i++) {
+          const s = visibleSnares[i];
+          const hold = s.holdDuration || s.duration || s.activeDuration || 0.45;
+          const x1 = (s.t - viewStart) / TIME_WINDOW_TOTAL * w;
+          const x2 = (s.t + hold - viewStart) / TIME_WINDOW_TOTAL * w;
+          const p = s.pitch !== undefined ? s.pitch : 0.5;
+          const yPos = baseY - (p - 0.5) * 44; // 음높이에 따른 수직 위치 (위: 고음, 아래: 저음)
+
+          if (!started) {
+            ctx.moveTo(x1, yPos);
+            started = true;
+          } else {
+            const prevS = visibleSnares[i - 1];
+            const prevHold = prevS.holdDuration || prevS.duration || prevS.activeDuration || 0.45;
+            const prevX2 = (prevS.t + prevHold - viewStart) / TIME_WINDOW_TOTAL * w;
+            const prevP = prevS.pitch !== undefined ? prevS.pitch : 0.5;
+            const prevY = baseY - (prevP - 0.5) * 44;
+
+            if (s.t - (prevS.t + prevHold) <= 2.5) {
+              const midX = (prevX2 + x1) * 0.5;
+              ctx.bezierCurveTo(midX, prevY, midX, yPos, x1, yPos);
+            } else {
+              ctx.moveTo(x1, yPos);
+            }
+          }
+          ctx.lineTo(x2, yPos);
+        }
+
+        // 네온 글로우 외곽선
+        ctx.strokeStyle = "rgba(0, 255, 204, 0.45)";
+        ctx.lineWidth = 5;
+        ctx.stroke();
+
+        // 중심 선명한 피치 라인
+        ctx.strokeStyle = "#00ffcc";
+        ctx.lineWidth = 2.5;
+        ctx.stroke();
+
+        ctx.restore();
+      }
+
+      // 4-B. 멜로디(MELODY) 연속 피치 궤적 곡선 (Continuous Pitch Curve) 렌더링
+      const isMelodyDimmed = syncFilter && currentInstFilter !== 'all' && currentInstFilter !== 'melody';
+      const visibleMelodies = sourceEvents.filter(e => {
+        if (e.instrument !== 'melody') return false;
+        const hold = e.holdDuration || e.duration || 0.25;
+        return (e.t + hold >= viewStart - 0.8) && (e.t <= viewEnd + 0.8);
+      });
+
+      if (visibleMelodies.length > 0) {
+        const melCfg = instConfigs['melody'];
+        const baseY = melCfg.y;
+
+        ctx.save();
+        if (isMelodyDimmed) ctx.globalAlpha = 0.15;
+
+        // 연속 피치 궤적 패스 (Bezier S-커브로 연결된 부드러운 멜로디 선율 곡선)
+        ctx.beginPath();
+        let startedMel = false;
+
+        for (let i = 0; i < visibleMelodies.length; i++) {
+          const m = visibleMelodies[i];
+          const hold = m.holdDuration || m.duration || 0.22;
+          const x1 = (m.t - viewStart) / TIME_WINDOW_TOTAL * w;
+          const x2 = (m.t + hold - viewStart) / TIME_WINDOW_TOTAL * w;
+          const p = m.pitch !== undefined ? m.pitch : 0.5;
+          const yPos = baseY - (p - 0.5) * 40; // 음높이에 따른 수직 위치 (위: 고음, 아래: 저음)
+
+          if (!startedMel) {
+            ctx.moveTo(x1, yPos);
+            startedMel = true;
+          } else {
+            const prevM = visibleMelodies[i - 1];
+            const prevHold = prevM.holdDuration || prevM.duration || 0.22;
+            const prevX2 = (prevM.t + prevHold - viewStart) / TIME_WINDOW_TOTAL * w;
+            const prevP = prevM.pitch !== undefined ? prevM.pitch : 0.5;
+            const prevY = baseY - (prevP - 0.5) * 40;
+
+            if (m.t - (prevM.t + prevHold) <= 1.8) {
+              const midX = (prevX2 + x1) * 0.5;
+              ctx.bezierCurveTo(midX, prevY, midX, yPos, x1, yPos);
+            } else {
+              ctx.moveTo(x1, yPos);
+            }
+          }
+          ctx.lineTo(x2, yPos);
+        }
+
+        // 네온 골드/앰버 글로우 외곽선
+        ctx.strokeStyle = "rgba(255, 170, 0, 0.45)";
+        ctx.lineWidth = 5;
+        ctx.stroke();
+
+        // 중심 선명한 멜로디 라인
+        ctx.strokeStyle = "#ffaa00";
+        ctx.lineWidth = 2.5;
+        ctx.stroke();
+
+        ctx.restore();
+      }
+
+      if (sourceEvents && sourceEvents.length > 0) {
+        for (const ev of sourceEvents) {
+          const holdDur = ev.holdDuration || ev.duration || (ev.instrument === 'snare' ? ev.activeDuration : 0) || 0;
+          if (ev.t + holdDur < viewStart) continue;
+          if (ev.t > viewEnd) break;
+
+          const isRejected = ev.instrument === 'rejected_kick';
+          if (isRejected && !showRejected) continue;
+
+          // 필터 연동 시 선택되지 않은 악기는 딤드 처리
+          let isDimmed = false;
+          if (syncFilter && currentInstFilter !== 'all') {
+            if (currentInstFilter === 'phases') isDimmed = true;
+            else if (ev.instrument !== currentInstFilter) isDimmed = true;
+          }
+
+          const x = (ev.t - viewStart) / TIME_WINDOW_TOTAL * w;
+
+          if (isRejected) {
+            // 탈락된 킥 디버그 렌더링: KICK 라인 바로 아래(y: 112)에 작고 반투명한 x 표시
+            ctx.fillStyle = isDimmed ? "rgba(255, 100, 100, 0.1)" : "rgba(255, 100, 100, 0.45)";
+            ctx.font = "10px sans-serif";
+            ctx.fillText("✕", x - 3, 114);
+            continue;
+          }
+
+          const cfg = instConfigs[ev.instrument];
+          if (!cfg) continue; // 정의되지 않은 유령 악기는 렌더링하지 않음
+
+          const y = cfg.y;
+          const color = cfg.color;
+          const energy = ev.energy ?? 0.6;
+
+          ctx.save();
+          if (isDimmed) ctx.globalAlpha = 0.15;
+
+          if (ev.instrument === 'snare') {
+            // === HARMONY NOTE & PITCH KEY NODE ===
+            const pitchVal = ev.pitch !== undefined ? ev.pitch : 0.5;
+            const pitchYOffset = (pitchVal - 0.5) * 44;
+            const noteY = y - pitchYOffset;
+            const holdW = (holdDur / TIME_WINDOW_TOTAL) * w;
+            const barH = 10;
+
+            // 1. 지속음 바 (단정하고 깔끔한 네온 글래스 바)
+            ctx.fillStyle = color;
+            ctx.globalAlpha = isDimmed ? 0.08 : 0.35;
+            ctx.fillRect(x, noteY - barH / 2, holdW, barH);
+
+            ctx.strokeStyle = color;
+            ctx.globalAlpha = isDimmed ? 0.2 : 0.95;
+            ctx.lineWidth = 1.5;
+            ctx.strokeRect(x, noteY - barH / 2, holdW, barH);
+
+            // 2. 타격 노드 (Onset Key Node)
+            const headRadius = 5 + (energy * 3.5);
+            ctx.beginPath();
+            ctx.arc(x, noteY, headRadius, 0, Math.PI * 2);
+            ctx.fillStyle = "#ffffff";
+            ctx.shadowColor = color;
+            ctx.shadowBlur = 10;
+            ctx.fill();
+            ctx.shadowBlur = 0;
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 2;
+            ctx.stroke();
+
+            // 3. 피치 방향 심볼 & 변동 텍스트 (상승/하강 표시)
+            let pitchSymbol = "•";
+            let deltaTxt = "";
+            if (ev.pitchDirection === "up") {
+              pitchSymbol = "▲";
+              if (ev.pitchDelta) deltaTxt = `+${Math.round(ev.pitchDelta * 100)}%`;
+            } else if (ev.pitchDirection === "down") {
+              pitchSymbol = "▼";
+              if (ev.pitchDelta) deltaTxt = `${Math.round(ev.pitchDelta * 100)}%`;
+            }
+            ctx.fillStyle = "#000000";
+            ctx.font = "bold 9px sans-serif";
+            ctx.textAlign = "center";
+            ctx.textBaseline = "middle";
+            ctx.fillText(pitchSymbol, x, noteY);
+
+            // 음높이 텍스트 라벨
+            if (!isDimmed) {
+              ctx.fillStyle = "#ffffff";
+              ctx.font = "bold 9px monospace";
+              ctx.textAlign = "left";
+              ctx.textBaseline = "bottom";
+              const pitchPercent = Math.round(pitchVal * 100);
+              const label = deltaTxt ? `${pitchPercent}% (${deltaTxt})` : `${pitchPercent}%`;
+              ctx.fillText(label, x + headRadius + 3, noteY - 3);
+            }
+
+            ctx.restore();
+            continue;
+          } else if (ev.instrument === 'melody') {
+            // === MELODY NOTE & PITCH KEY NODE ===
+            const pitchVal = ev.pitch !== undefined ? ev.pitch : 0.5;
+            const pitchYOffset = (pitchVal - 0.5) * 40;
+            const noteY = y - pitchYOffset;
+            const holdW = (holdDur / TIME_WINDOW_TOTAL) * w;
+            const barH = 8;
+
+            // 1. 지속음 바 (있을 경우 네온 오렌지 바)
+            if (holdDur > 0.1) {
+              ctx.fillStyle = color;
+              ctx.globalAlpha = isDimmed ? 0.08 : 0.35;
+              ctx.fillRect(x, noteY - barH / 2, holdW, barH);
+
+              ctx.strokeStyle = color;
+              ctx.globalAlpha = isDimmed ? 0.2 : 0.95;
+              ctx.lineWidth = 1.2;
+              ctx.strokeRect(x, noteY - barH / 2, holdW, barH);
+            }
+
+            // 2. 타격 노드 (Onset Key Node)
+            const headRadius = 4.5 + (energy * 3.5);
+            ctx.beginPath();
+            ctx.arc(x, noteY, headRadius, 0, Math.PI * 2);
+            ctx.fillStyle = "#ffffff";
+            ctx.shadowColor = color;
+            ctx.shadowBlur = 10;
+            ctx.fill();
+            ctx.shadowBlur = 0;
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 2;
+            ctx.stroke();
+
+            // 3. 피치 방향 심볼 & 변동 텍스트 (상승/하강 표시)
+            let pitchSymbol = "•";
+            let deltaTxt = "";
+            if (ev.pitchDirection === "up") {
+              pitchSymbol = "▲";
+              if (ev.pitchDelta) deltaTxt = `+${Math.round(ev.pitchDelta * 100)}%`;
+            } else if (ev.pitchDirection === "down") {
+              pitchSymbol = "▼";
+              if (ev.pitchDelta) deltaTxt = `${Math.round(ev.pitchDelta * 100)}%`;
+            }
+            ctx.fillStyle = "#000000";
+            ctx.font = "bold 8px sans-serif";
+            ctx.textAlign = "center";
+            ctx.textBaseline = "middle";
+            ctx.fillText(pitchSymbol, x, noteY);
+
+            // 음높이 텍스트 라벨
+            if (!isDimmed) {
+              ctx.fillStyle = "#ffffff";
+              ctx.font = "bold 9px monospace";
+              ctx.textAlign = "left";
+              ctx.textBaseline = "bottom";
+              const pitchPercent = Math.round(pitchVal * 100);
+              const label = deltaTxt ? `${pitchPercent}% (${deltaTxt})` : `${pitchPercent}%`;
+              ctx.fillText(label, x + headRadius + 3, noteY - 3);
+            }
+
+            ctx.restore();
+            continue;
+          } else if (holdDur > 0) {
+            // 그 외 지속음 (Long Note) 그리기
+            const holdW = (holdDur / TIME_WINDOW_TOTAL) * w;
+            const barH = 14;
+            const barY = y - barH / 2;
+
+            ctx.fillStyle = color;
+            ctx.globalAlpha = isDimmed ? 0.08 : 0.38;
+            ctx.fillRect(x, barY, holdW, barH);
+
+            ctx.globalAlpha = isDimmed ? 0.2 : 0.95;
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 1.5;
+            ctx.strokeRect(x, barY, holdW, barH);
+
+            ctx.strokeStyle = "#ffffff";
+            ctx.globalAlpha = isDimmed ? 0.15 : 0.7;
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            ctx.moveTo(x, y);
+            ctx.lineTo(x + holdW, y);
+            ctx.stroke();
+
+            ctx.fillStyle = color;
+            ctx.globalAlpha = isDimmed ? 0.25 : 1.0;
+            ctx.fillRect(x + holdW - 3, barY, 3, barH);
+
+            const headRadius = 4 + (energy * 4.5);
+            ctx.beginPath();
+            ctx.arc(x, y, headRadius, 0, Math.PI * 2);
+            ctx.fillStyle = color;
+            ctx.shadowColor = color;
+            ctx.shadowBlur = (energy > 0.7) ? 8 : 4;
+            ctx.fill();
+            ctx.shadowBlur = 0;
+            ctx.strokeStyle = "#ffffff";
+            ctx.lineWidth = 1.5;
+            ctx.stroke();
+
+            if (holdW >= 28 && !isDimmed) {
+              ctx.fillStyle = "#ffffff";
+              ctx.font = "bold 9px monospace";
+              ctx.textAlign = "left";
+              ctx.textBaseline = "middle";
+              ctx.fillText(`${holdDur.toFixed(2)}s`, x + headRadius + 4, y);
+            }
+          } else if (ev.instrument === 'drop') {
+            // DROP: 거대한 다이아몬드 네온 임팩트 마커
+            const sz = 9 + energy * 6;
+            ctx.fillStyle = "#ff00ff";
+            ctx.shadowColor = "#ff00ff";
+            ctx.shadowBlur = 12;
+            ctx.beginPath();
+            ctx.moveTo(x, y - sz);
+            ctx.lineTo(x + sz, y);
+            ctx.lineTo(x, y + sz);
+            ctx.lineTo(x - sz, y);
+            ctx.closePath();
+            ctx.fill();
+            ctx.strokeStyle = "#ffffff";
+            ctx.lineWidth = 2;
+            ctx.stroke();
+          } else {
+            // 일반 온셋 원(Circle)
+            const radius = 4 + (energy * 6.5);
+            ctx.beginPath();
+            ctx.arc(x, y, radius, 0, Math.PI * 2);
+            ctx.fillStyle = color;
+            ctx.shadowColor = color;
+            ctx.shadowBlur = (energy > 0.7) ? 8 : 0;
+            ctx.fill();
+            ctx.shadowBlur = 0;
+            ctx.strokeStyle = "#ffffff";
+            ctx.lineWidth = 1.5;
+            ctx.stroke();
+          }
+          ctx.restore();
+        }
+      }
+
+      // 5. 현재 플레이헤드 (Playhead)
+      const playheadX = (TIME_WINDOW_PAST / TIME_WINDOW_TOTAL) * w;
+      
+      // 플레이헤드 글로우 선
+      ctx.strokeStyle = "rgba(0, 255, 204, 0.4)";
+      ctx.lineWidth = 6;
+      ctx.beginPath();
+      ctx.moveTo(playheadX, 0);
+      ctx.lineTo(playheadX, h);
+      ctx.stroke();
+
+      // 플레이헤드 코어 선
+      ctx.strokeStyle = "#ffffff";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(playheadX, 0);
+      ctx.lineTo(playheadX, h);
+      ctx.stroke();
+
+      // 상단 삼각형 포인터
+      ctx.fillStyle = "#00ffcc";
+      ctx.beginPath();
+      ctx.moveTo(playheadX - 6, 0);
+      ctx.lineTo(playheadX + 6, 0);
+      ctx.lineTo(playheadX, 10);
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    function loop() {
+      requestAnimationFrame(loop);
+      if (!timeline) return;
+      
+      const t = player.currentTime;
+      timeDisplay.innerText = t.toFixed(3) + " s";
+      
+      drawGraph(t);
+
+      if (player.paused) return;
+      
+      if (timeline.phases) {
+        const currentPhase = timeline.phases.find(p => t >= p.startTime && t <= p.endTime);
+        if (currentPhase) {
+          let text = "PHASE: " + currentPhase.phase;
+          if (currentPhase.phase === "break" && currentPhase.preDropGapDuration > 0) {
+             text = "PRE-DROP BLACKOUT! (" + currentPhase.preDropGapDuration + "s)";
+             phaseEl.className = "predrop";
+          } else {
+             phaseEl.className = "";
+          }
+          if (phaseEl.innerText !== text) phaseEl.innerText = text;
+        }
+      }
+
+      // 자동 플래시 및 피치 반응 효과
+      const sourceKey = document.getElementById('sourceSelect').value;
+      const sourceEventsForFlash = (sourceKey === 'events' ? timeline.events : timeline.rawOnsets) || [];
+      if (sourceEventsForFlash) {
+        while (nextEventIdx < sourceEventsForFlash.length) {
+          const ev = sourceEventsForFlash[nextEventIdx];
+          if (ev.t <= t) {
+            const inst = ev.instrument;
+            const box = boxes[inst];
+            if (box) {
+              box.classList.add('active');
+              if (flashTimeouts[inst]) clearTimeout(flashTimeouts[inst]);
+              
+              if (inst === 'snare') {
+                // 화음의 피치 방향(위/아래)을 버튼 텍스트에 동적 반영하고 160ms 펄스
+                const arrow = ev.pitchDirection === 'up' ? ' ▲' : (ev.pitchDirection === 'down' ? ' ▼' : '');
+                const pitchTxt = ev.pitch !== undefined ? Math.round(ev.pitch * 100) + '%' : '지속음';
+                box.innerHTML = `<span class="hotkey">2</span>SYNTH${arrow}<br><small>(화음 ${pitchTxt})</small>`;
+                flashTimeouts[inst] = setTimeout(() => {
+                  box.classList.remove('active');
+                  box.innerHTML = `<span class="hotkey">2</span>SYNTH<br><small>(화음/지속음)</small>`;
+                }, 160);
+              } else if (inst === 'melody') {
+                // 멜로디의 피치 방향(위/아래)을 버튼 텍스트에 동적 반영하고 140ms 펄스
+                const arrow = ev.pitchDirection === 'up' ? ' ▲' : (ev.pitchDirection === 'down' ? ' ▼' : '');
+                const pitchTxt = ev.pitch !== undefined ? Math.round(ev.pitch * 100) + '%' : '멜로디';
+                box.innerHTML = `<span class="hotkey">3</span>MELODY${arrow}<br><small>(멜로디 ${pitchTxt})</small>`;
+                flashTimeouts[inst] = setTimeout(() => {
+                  box.classList.remove('active');
+                  box.innerHTML = `<span class="hotkey">3</span>MELODY<br><small>(멜로디)</small>`;
+                }, 140);
+              } else {
+                flashTimeouts[inst] = setTimeout(() => box.classList.remove('active'), 100);
+              }
+            }
+            nextEventIdx++;
+          } else {
+            break;
+          }
+        }
+      }
+    }
+
+    requestAnimationFrame(loop);
+  </script>
+</body>
+</html>
+

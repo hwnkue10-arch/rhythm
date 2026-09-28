@@ -4,6 +4,9 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>리듬 탄막 게임</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;600;700;800;900&family=Rajdhani:wght@600;700&display=swap" rel="stylesheet" />
 <link rel="stylesheet" href="style.css" />
 </head>
 <body>
@@ -41,35 +44,82 @@
 
 <section id="screen-game" class="screen hidden">
   <div class="game-layout">
-    <!-- 좌측 조작법 패널 -->
-    <div id="controls-panel" class="controls-panel">
-      <h3>조작법 가이드</h3>
-      <div class="control-item">
-        <div class="key-group">
-          <span class="key-cap">W</span>
-          <div class="key-subgroup">
-            <span class="key-cap">A</span><span class="key-cap">S</span><span class="key-cap">D</span>
+    <!-- 좌측 사이드바: 조작법 가이드 박스 & 플레이어 목록 박스 분리 -->
+    <aside class="game-sidebar">
+      <!-- 1. 조작법 가이드 박스 -->
+      <div class="side-box controls-box">
+        <h3>조작 모드</h3>
+        <div class="mode-switch-wrapper">
+          <div class="mode-sliding-switch" id="mode-sliding-switch" data-mode="KEYBOARD" role="radiogroup" aria-label="조작 모드 전환">
+            <div class="mode-sliding-knob" id="mode-sliding-knob"></div>
+            <button type="button" class="mode-tab-btn active" id="tab-mode-keyboard" data-mode="KEYBOARD" role="radio" aria-checked="true">
+              KEYBOARD
+            </button>
+            <button type="button" class="mode-tab-btn" id="tab-mode-mouse" data-mode="MOUSE" role="radio" aria-checked="false">
+              MOUSE
+            </button>
           </div>
         </div>
-        <span class="control-desc">방향 이동</span>
-      </div>
-      <div class="control-item">
-        <div class="key-group">
-          <span class="key-cap wide">SPACE</span>
+
+        <div id="controls-keyboard" class="control-details">
+          <div class="control-item">
+            <div class="key-group">
+              <span class="key-cap">W</span>
+              <div class="key-subgroup">
+                <span class="key-cap">A</span><span class="key-cap">S</span><span class="key-cap">D</span>
+              </div>
+            </div>
+            <span class="control-desc">이동</span>
+          </div>
+          <div class="control-item">
+            <div class="key-group">
+              <span class="key-cap wide">SHIFT</span>
+            </div>
+            <span class="control-desc">정밀 이동</span>
+          </div>
+          <div class="control-item">
+            <div class="key-group">
+              <span class="key-cap wide">SPACE</span>
+            </div>
+            <span class="control-desc">대시</span>
+          </div>
         </div>
-        <span class="control-desc">대시 (누른 시간에 비례)</span>
-      </div>
-      <div class="control-item">
-        <div class="key-group">
-          <span class="key-cap wide">SHIFT</span>
+
+        <div id="controls-mouse" class="control-details hidden">
+          <div class="control-item">
+            <div class="key-group">
+              <span class="key-cap">W</span>
+              <div class="key-subgroup">
+                <span class="key-cap">A</span><span class="key-cap">S</span><span class="key-cap">D</span>
+              </div>
+            </div>
+            <span class="control-desc">이동</span>
+          </div>
+          <div class="control-item">
+            <div class="key-group">
+              <span class="key-cap wide">SHIFT</span>
+            </div>
+            <span class="control-desc">정밀 이동</span>
+          </div>
+          <div class="control-item">
+            <div class="key-group">
+              <span class="key-cap wide">LEFT CLICK</span>
+            </div>
+            <span class="control-desc">마우스 위치로 대시</span>
+          </div>
         </div>
-        <span class="control-desc">고속 이동</span>
+        <div class="control-item">
+          <span class="control-desc tip">💡 쓰러진 팀원 근접 시 부활</span>
+        </div>
       </div>
-      <div class="control-item">
-        <span class="control-desc tip">💡 쓰러진 팀원 근접 시 4초 내 자동 부활!</span>
+
+      <!-- 2. 플레이어 목록 박스 -->
+      <div class="side-box players-box">
+        <h3>플레이어</h3>
+        <div id="ingame-player-list" class="ingame-player-list"></div>
+        <button id="btn-leave-game" class="secondary leave-game-btn">방 나가기</button>
       </div>
-      <button id="btn-leave-game" class="secondary leave-game-btn">방 나가기</button>
-    </div>
+    </aside>
 
     <!-- 인게임 메인 화면 -->
     <div class="game-main">
@@ -82,6 +132,15 @@
         </div>
       </div>
       <canvas id="game-canvas" width="1280" height="820"></canvas>
+      <div class="song-progress" aria-label="곡 진행도">
+        <div class="song-progress-meta">
+          <span id="song-progress-time">0:00 / 0:00</span>
+          <span id="song-progress-percent">0%</span>
+        </div>
+        <div class="song-progress-track">
+          <div id="song-progress-fill" class="song-progress-fill"></div>
+        </div>
+      </div>
       <audio id="song-audio"></audio>
     </div>
   </div>

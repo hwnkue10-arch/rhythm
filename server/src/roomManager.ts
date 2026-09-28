@@ -1,11 +1,13 @@
 import { WebSocket } from "ws";
 import { v4 as uuid } from "uuid";
 import fs from "fs";
-import { PlayerState, RoomState, SongSlot, Timeline } from "./types";
+import path from "path";
+import { PlayerState, PlayerStats, RoomState, SongSlot, Timeline } from "./types";
 
-/** 디스크 파일을 안전하게 삭제합니다. 존재하지 않거나 오류가 나도 서버는 멈추지 않습니다. */
+/** 디스크 파일을 안전하게 삭제합니다. 기본곡은 영구 보존하며, 존재하지 않거나 오류가 나도 서버는 멈추지 않습니다. */
 async function safeDeleteFile(filePath: string | null | undefined): Promise<void> {
   if (!filePath) return;
+  if (filePath.includes("Through_The_Obsidian_Grid") || filePath.includes("Obsidian_Geometry")) return;
   try {
     if (fs.existsSync(filePath)) {
       await fs.promises.unlink(filePath);
@@ -19,7 +21,7 @@ async function safeDeleteFile(filePath: string | null | undefined): Promise<void
 const REVIVE_WINDOW_MS = 4000;
 const REVIVE_DOWN_TIME_MS = 700; // 사망 직후 0.7초 동안은 쓰러짐 상태로 부활 불가 (겹침 무적 방지)
 const REVIVER_COOLDOWN_MS = 2000; // 아군을 살린 플레이어의 부활 쿨다운
-const INVULNERABLE_MS = 800; // 피격 무적 (0.8초)
+const INVULNERABLE_MS = 1600; // 피격 무적 (기존 0.8초 -> 1.6초로 상향하여 다중 피격 버그 방지)
 const REVIVE_INVULNERABLE_MS = 1800; // 부활 직후 무적 (1.8초)
 const MAX_LIVES = 3;
 const PLAYER_COLORS = ["#3378DD", "#D85A30", "#0F9E75", "#D4537E"];
@@ -29,10 +31,37 @@ interface RoomRuntime {
   state: RoomState;
   sockets: Map<string, WebSocket>;
   timelines: Map<number, Timeline>; // stage -> timeline (재시작 시 재사용)
+  stageStartTimes: Map<number, number>; // stage -> server epoch ms
   stageEndTimer: NodeJS.Timeout | null;
   failCheckTimer: NodeJS.Timeout | null;
+  healTimer: NodeJS.Timeout | null;
   reviverCooldowns: Map<string, number>; // playerId -> cooldownUntil (ms)
   disconnectTimers: Map<string, NodeJS.Timeout>; // playerId -> timer
+}
+
+const AUTO_HEAL_MS = 10000; // 10초 동안 피격당하지 않으면 체력 1칸 회복
+
+/** 네온 펄스 테마의 기본곡 (Through The Obsidian Grid) 파일 경로 해석 */
+const DEFAULT_NEON_SONG_FILE = (() => {
+  const assetPath = path.resolve(__dirname, "..", "..", "client", "assets", "Through_The_Obsidian_Grid.mp3");
+  if (fs.existsSync(assetPath)) return assetPath;
+  const rootPath = path.resolve(__dirname, "..", "..", "Through_The_Obsidian_Grid.mp3");
+  if (fs.existsSync(rootPath)) return rootPath;
+  return assetPath;
+})();
+
+export function defaultNeonPulseSong(slot: 1 | 2 | 3): SongSlot {
+  return {
+    slot,
+    sourceType: "upload",
+    title: "기본곡",
+    filePath: DEFAULT_NEON_SONG_FILE,
+    publicUrl: "/assets/Through_The_Obsidian_Grid.mp3",
+    fullDurationSec: 177,
+    durationSec: 177, // 기본곡은 전체 곡 길이 모두 재생
+    verified: true,
+    isDefault: true,
+  };
 }
 
 function emptySong(slot: 1 | 2 | 3): SongSlot {
@@ -77,6 +106,13 @@ export class RoomManager {
     return list;
   }
 
+  private reindexPlayerColors(players: Record<string, PlayerState>) {
+    const orderedIds = Object.keys(players);
+    orderedIds.forEach((id, index) => {
+      players[id].color = PLAYER_COLORS[index % PLAYER_COLORS.length];
+    });
+  }
+
   createRoom(hostSocket: WebSocket, nickname: string): { room: RoomState; playerId: string } {
     const roomId = uuid().slice(0, 6).toUpperCase();
     const playerId = uuid();
@@ -86,15 +122,17 @@ export class RoomManager {
       hostId: playerId,
       phase: "lobby",
       stage: 1,
-      songs: [emptySong(1), emptySong(2), emptySong(3)],
+      songs: [defaultNeonPulseSong(1), defaultNeonPulseSong(2), defaultNeonPulseSong(3)],
       players: { [playerId]: player },
     };
     const runtime: RoomRuntime = {
       state,
       sockets: new Map([[playerId, hostSocket]]),
       timelines: new Map(),
+      stageStartTimes: new Map(),
       stageEndTimer: null,
       failCheckTimer: null,
+      healTimer: null,
       reviverCooldowns: new Map(),
       disconnectTimers: new Map(),
     };
@@ -109,11 +147,9 @@ export class RoomManager {
     if (Object.keys(runtime.state.players).length >= 4) return { error: "방 인원이 가득 찼습니다." };
 
     const playerId = uuid();
-    // 이미 사용 중인 색상을 제외하고 남은 인덱스 중 가장 빠른 것을 배정 (퇴장 후 재입장 시 색상 중복 방지)
-    const usedColors = new Set(Object.values(runtime.state.players).map((p) => p.color));
-    const colorIndex = PLAYER_COLORS.findIndex((c) => !usedColors.has(c));
-    const player = this.makePlayer(playerId, nickname, colorIndex >= 0 ? colorIndex : 0);
+    const player = this.makePlayer(playerId, nickname, Object.keys(runtime.state.players).length);
     runtime.state.players[playerId] = player;
+    this.reindexPlayerColors(runtime.state.players);
     runtime.sockets.set(playerId, socket);
     return { room: runtime.state, playerId };
   }
@@ -149,6 +185,7 @@ export class RoomManager {
       y: 0.8,
       invulnerableUntil: 0,
       stats: { hitCount: 0, deathCount: 0, reviveCount: 0 },
+      totalStats: { hitCount: 0, deathCount: 0, reviveCount: 0 },
     };
   }
 
@@ -159,7 +196,10 @@ export class RoomManager {
   broadcast(roomId: string, payload: unknown, exceptPlayerId?: string) {
     const runtime = this.rooms.get(roomId);
     if (!runtime) return;
-    const msg = JSON.stringify(payload);
+    const withServerTime = payload && typeof payload === "object"
+      ? { ...(payload as Record<string, unknown>), serverTime: Date.now() }
+      : payload;
+    const msg = JSON.stringify(withServerTime);
     for (const [pid, sock] of runtime.sockets) {
       if (pid === exceptPlayerId) continue;
       if (sock.readyState === WebSocket.OPEN) sock.send(msg);
@@ -183,7 +223,25 @@ export class RoomManager {
       safeDeleteFile(existing.filePath);
     }
 
-    runtime.state.songs[slot - 1] = { ...existing, ...song, slot };
+    const updated: SongSlot = { ...existing, ...song, slot };
+    // 기본곡은 전체 곡 길이로 항상 고정
+    if (updated.isDefault && updated.fullDurationSec) {
+      updated.durationSec = updated.fullDurationSec;
+    }
+
+    runtime.state.songs[slot - 1] = updated;
+    this.broadcastRoomState(roomId);
+  }
+
+  resetToDefaultSong(roomId: string, playerId: string, slot: 1 | 2 | 3) {
+    const runtime = this.rooms.get(roomId);
+    if (!runtime || runtime.state.hostId !== playerId) return;
+    if (runtime.state.phase !== "lobby") return;
+    const existing = runtime.state.songs[slot - 1];
+    if (existing && existing.filePath) {
+      safeDeleteFile(existing.filePath);
+    }
+    runtime.state.songs[slot - 1] = defaultNeonPulseSong(slot);
     this.broadcastRoomState(roomId);
   }
 
@@ -230,6 +288,7 @@ export class RoomManager {
     if (!runtime) return;
     runtime.state.phase = "playing";
     runtime.state.stage = stage;
+    delete runtime.state.lastStats;
     runtime.timelines.set(stage, timeline);
     runtime.reviverCooldowns.clear();
     for (const p of Object.values(runtime.state.players)) {
@@ -237,9 +296,14 @@ export class RoomManager {
       p.dead = false;
       p.diedAt = null;
       p.invulnerableUntil = 0;
+      p.lastHitAt = Date.now() + 1500;
       p.stats = { hitCount: 0, deathCount: 0, reviveCount: 0 };
+      if (stage === 1 || !p.totalStats) {
+        p.totalStats = { hitCount: 0, deathCount: 0, reviveCount: 0 };
+      }
     }
     const serverStartTime = Date.now() + 1500; // 클라이언트가 준비할 시간 버퍼
+    runtime.stageStartTimes.set(stage, serverStartTime);
     this.broadcast(roomId, {
       type: "stage_start",
       stage,
@@ -253,6 +317,40 @@ export class RoomManager {
     if (runtime.stageEndTimer) clearTimeout(runtime.stageEndTimer);
     const untilEnd = serverStartTime - Date.now() + timeline.durationSec * 1000 + 300;
     runtime.stageEndTimer = setTimeout(() => onStageEnd(roomId), Math.max(untilEnd, 0));
+
+    if (runtime.healTimer) clearInterval(runtime.healTimer);
+    runtime.healTimer = setInterval(() => {
+      const now = Date.now();
+      let changed = false;
+      const currentRuntime = this.rooms.get(roomId);
+      if (!currentRuntime || currentRuntime.state.phase !== "playing") {
+        if (currentRuntime?.healTimer) {
+          clearInterval(currentRuntime.healTimer);
+          currentRuntime.healTimer = null;
+        }
+        return;
+      }
+      for (const [pid, p] of Object.entries(currentRuntime.state.players)) {
+        if (!p.dead && p.lives < MAX_LIVES && p.nickname !== "관리자") {
+          // 마지막으로 맞은 시점(없으면 게임 시작 기준)부터 10초 경과 확인
+          const lastHit = p.lastHitAt || serverStartTime;
+          if (now - lastHit >= AUTO_HEAL_MS) {
+            p.lives += 1;
+            p.lastHitAt = now; // 한 번 회복 후 다시 10초 대기
+            changed = true;
+            this.broadcast(roomId, {
+              type: "life_update",
+              id: pid,
+              lives: p.lives,
+              dead: p.dead,
+              invulnerableUntil: p.invulnerableUntil,
+              lastHitAt: p.lastHitAt,
+            });
+          }
+        }
+      }
+      if (changed) this.broadcastRoomState(roomId);
+    }, 1000);
   }
 
   getTimeline(roomId: string, stage: number): Timeline | undefined {
@@ -280,8 +378,17 @@ export class RoomManager {
     if (!runtime) return;
     const wasLastStage = runtime.state.stage >= 3;
 
-    // 플레이어별 통계 데이터 모음
-    const playerStats: Record<string, { nickname: string; color: string; hitCount: number; deathCount: number; reviveCount: number }> = {};
+    // 플레이어별 통계 데이터 모음 (현재 스테이지 + 1~3 스테이지 누적)
+    const playerStats: Record<string, {
+      nickname: string;
+      color: string;
+      hitCount: number;
+      deathCount: number;
+      reviveCount: number;
+      totalHitCount: number;
+      totalDeathCount: number;
+      totalReviveCount: number;
+    }> = {};
     for (const [pid, p] of Object.entries(runtime.state.players)) {
       playerStats[pid] = {
         nickname: p.nickname,
@@ -289,11 +396,22 @@ export class RoomManager {
         hitCount: p.stats?.hitCount || 0,
         deathCount: p.stats?.deathCount || 0,
         reviveCount: p.stats?.reviveCount || 0,
+        totalHitCount: p.totalStats?.hitCount || 0,
+        totalDeathCount: p.totalStats?.deathCount || 0,
+        totalReviveCount: p.totalStats?.reviveCount || 0,
       };
       p.lives = MAX_LIVES;
       p.dead = false;
       p.diedAt = null;
+      p.lastHitAt = Date.now();
     }
+
+    if (runtime.healTimer) {
+      clearInterval(runtime.healTimer);
+      runtime.healTimer = null;
+    }
+
+    runtime.state.lastStats = playerStats;
 
     if (wasLastStage) {
       runtime.state.phase = "game_clear";
@@ -311,11 +429,15 @@ export class RoomManager {
     if (!runtime || runtime.state.phase !== "playing") return;
     const p = runtime.state.players[playerId];
     if (!p || p.dead) return;
+    if (p.nickname === "관리자") return; // 관리자 모드: 피격 무시 및 무적
     const now = Date.now();
     if (now < p.invulnerableUntil) return; // 무적 시간 중 판정 무시
 
     if (!p.stats) p.stats = { hitCount: 0, deathCount: 0, reviveCount: 0 };
+    if (!p.totalStats) p.totalStats = { hitCount: 0, deathCount: 0, reviveCount: 0 };
     p.stats.hitCount += 1;
+    p.totalStats.hitCount += 1;
+    p.lastHitAt = now;
 
     p.lives -= 1;
     if (p.lives <= 0) {
@@ -323,6 +445,7 @@ export class RoomManager {
       p.dead = true;
       p.diedAt = now;
       p.stats.deathCount += 1;
+      p.totalStats.deathCount += 1;
     } else {
       p.invulnerableUntil = now + INVULNERABLE_MS;
     }
@@ -332,6 +455,8 @@ export class RoomManager {
       lives: p.lives,
       dead: p.dead,
       invulnerableUntil: p.invulnerableUntil,
+      invulnerableDurationMs: INVULNERABLE_MS,
+      lastHitAt: p.lastHitAt,
     });
 
     const allDead = Object.values(runtime.state.players).every((pl) => pl.dead);
@@ -371,7 +496,9 @@ export class RoomManager {
     // 부활 성공: 살려준 사람에게 2초 쿨다운 부여 및 통계 카운트
     runtime.reviverCooldowns.set(reviverId, now + REVIVER_COOLDOWN_MS);
     if (!reviver.stats) reviver.stats = { hitCount: 0, deathCount: 0, reviveCount: 0 };
+    if (!reviver.totalStats) reviver.totalStats = { hitCount: 0, deathCount: 0, reviveCount: 0 };
     reviver.stats.reviveCount += 1;
+    reviver.totalStats.reviveCount += 1;
 
     target.dead = false;
     target.lives = 1;
@@ -391,6 +518,7 @@ export class RoomManager {
       x: target.x,
       y: target.y,
       invulnerableUntil: target.invulnerableUntil,
+      invulnerableDurationMs: REVIVE_INVULNERABLE_MS,
     });
     return true;
   }
@@ -399,8 +527,22 @@ export class RoomManager {
     const runtime = this.rooms.get(roomId);
     if (!runtime || runtime.state.phase !== "playing") return;
     runtime.state.phase = "stage_failed";
+    const playerStats: Record<string, PlayerStats & { nickname: string; color: string; totalHitCount: number; totalDeathCount: number; totalReviveCount: number }> = {};
+    for (const p of Object.values(runtime.state.players)) {
+      playerStats[p.id] = {
+        nickname: p.nickname,
+        color: p.color,
+        hitCount: p.stats?.hitCount || 0,
+        deathCount: p.stats?.deathCount || 0,
+        reviveCount: p.stats?.reviveCount || 0,
+        totalHitCount: p.totalStats?.hitCount || 0,
+        totalDeathCount: p.totalStats?.deathCount || 0,
+        totalReviveCount: p.totalStats?.reviveCount || 0,
+      };
+    }
+    runtime.state.lastStats = playerStats;
     this.broadcastRoomState(roomId);
-    this.broadcast(roomId, { type: "stage_failed", stage: runtime.state.stage });
+    this.broadcast(roomId, { type: "stage_failed", stage: runtime.state.stage, stats: playerStats });
   }
 
   restartStage(roomId: string, hostId: string, onStageEnd: (roomId: string) => void) {
@@ -416,13 +558,21 @@ export class RoomManager {
     if (!runtime || runtime.state.hostId !== hostId) return;
     if (runtime.stageEndTimer) clearTimeout(runtime.stageEndTimer);
     if (runtime.failCheckTimer) clearTimeout(runtime.failCheckTimer);
+    if (runtime.healTimer) {
+      clearInterval(runtime.healTimer);
+      runtime.healTimer = null;
+    }
     runtime.state.phase = "lobby";
     runtime.state.stage = 1;
+    delete runtime.state.lastStats;
     runtime.timelines.clear();
+    runtime.stageStartTimes.clear();
     for (const p of Object.values(runtime.state.players)) {
       p.lives = MAX_LIVES;
       p.dead = false;
       p.diedAt = null;
+      p.stats = { hitCount: 0, deathCount: 0, reviveCount: 0 };
+      p.totalStats = { hitCount: 0, deathCount: 0, reviveCount: 0 };
     }
     this.broadcastRoomState(roomId);
   }
@@ -438,6 +588,10 @@ export class RoomManager {
     if (!runtime) return;
     if (runtime.stageEndTimer) clearTimeout(runtime.stageEndTimer);
     if (runtime.failCheckTimer) clearTimeout(runtime.failCheckTimer);
+    if (runtime.healTimer) {
+      clearInterval(runtime.healTimer);
+      runtime.healTimer = null;
+    }
     for (const t of runtime.disconnectTimers.values()) clearTimeout(t);
     runtime.disconnectTimers.clear();
 
@@ -464,17 +618,14 @@ export class RoomManager {
     const existing = runtime.disconnectTimers.get(playerId);
     if (existing) clearTimeout(existing);
 
-    // 다른 플레이어가 없으면 즉시 방 삭제 (잔재 방 방지)
-    const connectedPlayers = Object.values(runtime.state.players).filter((p) => p.connected);
-    if (connectedPlayers.length === 0) {
-      this.deleteRoom(roomId);
-      onRemoved();
-      return;
-    }
-
-    // 10초 유예 후에도 안 돌아오면 퇴장 처리
+    // 새로고침/일시적 끊김은 유예 시간 안에 reconnect()에서 복구하고,
+    // 돌아오지 않으면 removePlayer()가 빈 방과 업로드 파일까지 정리한다.
     const timer = setTimeout(() => {
       runtime.disconnectTimers.delete(playerId);
+      const current = this.rooms.get(roomId);
+      if (!current) return;
+      const currentPlayer = current.state.players[playerId];
+      if (!currentPlayer || currentPlayer.connected) return;
       this.removePlayer(roomId, playerId);
       onRemoved();
     }, DISCONNECT_GRACE_MS);
@@ -498,6 +649,7 @@ export class RoomManager {
     const runtime = this.rooms.get(roomId);
     if (!runtime) return { deleted: false };
     delete runtime.state.players[playerId];
+    this.reindexPlayerColors(runtime.state.players);
     runtime.sockets.delete(playerId);
     const timer = runtime.disconnectTimers.get(playerId);
     if (timer) {
@@ -507,6 +659,7 @@ export class RoomManager {
     this.broadcast(roomId, { type: "player_removed", id: playerId });
 
     if (Object.keys(runtime.state.players).length === 0) {
+      if (runtime.healTimer) clearInterval(runtime.healTimer);
       this.deleteRoom(roomId);
       return { deleted: true };
     }

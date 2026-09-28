@@ -44,6 +44,7 @@ async function cleanUploadsDir(): Promise<void> {
 const app = express();
 app.use(express.json());
 app.use("/uploads", express.static(UPLOAD_DIR));
+app.use("/assets", express.static(path.join(__dirname, "..", "..", "client", "assets")));
 app.use(express.static(path.join(__dirname, "..", "..", "client")));
 
 const upload = multer({
@@ -69,6 +70,18 @@ app.post("/api/upload-song", upload.single("file"), (req, res) => {
     title: req.file.originalname,
     verified: true,
   });
+});
+
+// 테스트용 단일 곡 분석 API (analyzer.html 전용)
+app.get("/api/analyze-test", async (req, res) => {
+  try {
+    const songPath = path.join(__dirname, "..", "..", "client", "assets", "Through_The_Obsidian_Grid.mp3");
+    // stage=1 기준으로 테스트 (duration: 215초)
+    const timeline = await analyzeSongToTimeline(songPath, "test-internal", 1, 215);
+    res.json(timeline);
+  } catch (err: any) {
+    res.status(500).json({ error: "분석 실패: " + (err?.message || err) });
+  }
 });
 
 // 유튜브 링크 확인: 실제 다운로드 전에 제목/썸네일을 보여줘서 방장이 맞는 노래인지 확인.
@@ -141,7 +154,7 @@ wss.on("connection", (socket: WebSocket) => {
       switch (msg.type) {
         case "create_room": {
           const { room, playerId } = roomManager.createRoom(socket, msg.nickname || "Player");
-          socket.send(JSON.stringify({ type: "joined", roomId: room.id, playerId }));
+          socket.send(JSON.stringify({ type: "joined", roomId: room.id, playerId, serverTime: Date.now() }));
           roomManager.broadcastRoomState(room.id);
           broadcastRoomList();
           break;
@@ -152,13 +165,17 @@ wss.on("connection", (socket: WebSocket) => {
             socket.send(JSON.stringify({ type: "error", message: result.error }));
             return;
           }
-          socket.send(JSON.stringify({ type: "joined", roomId: result.room.id, playerId: result.playerId }));
+          socket.send(JSON.stringify({ type: "joined", roomId: result.room.id, playerId: result.playerId, serverTime: Date.now() }));
           roomManager.broadcastRoomState(result.room.id);
           broadcastRoomList();
           break;
         }
         case "set_song": {
           roomManager.setSong(msg.roomId, msg.playerId, msg.slot, msg.song);
+          break;
+        }
+        case "reset_default_song": {
+          roomManager.resetToDefaultSong(msg.roomId, msg.playerId, msg.slot);
           break;
         }
         case "kick": {
@@ -220,7 +237,7 @@ wss.on("connection", (socket: WebSocket) => {
             socket.send(JSON.stringify({ type: "reconnect_failed", message: result.error }));
             return;
           }
-          socket.send(JSON.stringify({ type: "joined", roomId: result.room.id, playerId: msg.playerId }));
+          socket.send(JSON.stringify({ type: "joined", roomId: result.room.id, playerId: msg.playerId, serverTime: Date.now() }));
           roomManager.broadcastRoomState(result.room.id);
           broadcastRoomList();
 
@@ -237,7 +254,8 @@ wss.on("connection", (socket: WebSocket) => {
                 songUrl: song.publicUrl,
                 timeline,
                 themeId: timeline.themeId || "neon_pulse",
-                serverStartTime: Date.now(), // 클라이언트 자체 보정
+                serverStartTime: runtime.stageStartTimes.get(stage) || Date.now(),
+                serverTime: Date.now(),
               }));
             }
           }
@@ -271,7 +289,7 @@ wss.on("connection", (socket: WebSocket) => {
 server.listen(PORT, '0.0.0.0', async () => {
   // 서버 시작 시: 이전 세션의 잔재 오디오 파일 초기화
   await cleanUploadsDir();
-  console.log(`리듬 게임 서버가 http://0.0.0.0:${PORT} 에서 실행 중입니다. (외부 접속 허용)`);
+  console.log(`리듬 게임 서버가 http://localhost:${PORT} 에서 실행 중입니다. (외부 접속 허용)`);
 });
 
 /** 서버 종료 시 uploads/ 폴더 임시 파일 전량 삭제 후 프로세스 종료 */

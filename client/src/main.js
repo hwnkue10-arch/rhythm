@@ -103,11 +103,65 @@ net.on("kicked", () => {
 net.on("room_state", (msg) => {
   roomState = msg.room;
   if (game) game.roomState = roomState;
+
   if (roomState.phase === "lobby") {
+    try { sessionStorage.removeItem("last_result_stats"); } catch (_) {}
+    lastResultStats = null;
     renderLobby();
     showScreen("lobby");
+    return;
+  }
+
+  if (roomState.phase === "playing") {
+    showScreen("game");
+    if (!game) {
+      game = new Game(net, document.getElementById("game-canvas"), document.getElementById("song-audio"), roomState);
+      setControlMode(currentControlMode);
+    }
+    game.roomState = roomState;
+    renderInGamePlayers();
+    return;
+  }
+
+  if (roomState.phase === "game_clear") {
+    if (game) game.stopStage();
+    const stats = roomState.lastStats || buildStatsFromPlayers(roomState.players);
+    showResult("ALL STAGES CLEAR!", "모든 스테이지를 클리어했습니다. 축하합니다!", { stats });
+    return;
+  }
+
+  if (roomState.phase === "stage_clear") {
+    if (game) game.stopStage();
+    const stats = roomState.lastStats || buildStatsFromPlayers(roomState.players);
+    showResult("STAGE CLEAR!", "스테이지를 완벽하게 돌파했습니다!", { next: true, nextStage: roomState.stage + 1, stats });
+    return;
+  }
+
+  if (roomState.phase === "stage_failed") {
+    if (game) game.stopStage();
+    const stats = roomState.lastStats || buildStatsFromPlayers(roomState.players);
+    showResult("STAGE FAILED", "전원이 쓰러졌습니다. 이 스테이지를 다시 시작할 수 있습니다.", { restart: true, stats });
+    return;
   }
 });
+
+function buildStatsFromPlayers(players) {
+  if (!players) return null;
+  const result = {};
+  for (const p of Object.values(players)) {
+    result[p.id] = {
+      nickname: p.nickname,
+      color: p.color,
+      hitCount: p.stats?.hitCount || 0,
+      deathCount: p.stats?.deathCount || 0,
+      reviveCount: p.stats?.reviveCount || 0,
+      totalHitCount: p.totalStats?.hitCount ?? p.stats?.hitCount ?? 0,
+      totalDeathCount: p.totalStats?.deathCount ?? p.stats?.deathCount ?? 0,
+      totalReviveCount: p.totalStats?.reviveCount ?? p.stats?.reviveCount ?? 0,
+    };
+  }
+  return result;
+}
 
 function renderLobby() {
   document.getElementById("room-code-display").textContent = roomState.id;
@@ -145,33 +199,91 @@ function renderLobby() {
   document.getElementById("btn-start").classList.toggle("hidden", !isHost);
 }
 
+function renderInGamePlayers() {
+  const list = document.getElementById("ingame-player-list");
+  if (!list || !roomState) return;
+  list.innerHTML = "";
+  for (const p of Object.values(roomState.players)) {
+    const row = document.createElement("div");
+    row.className = `ingame-player-row${p.dead ? " dead" : ""}`;
+
+    const dot = document.createElement("span");
+    dot.className = "ingame-player-dot";
+    dot.style.background = p.color;
+
+    const name = document.createElement("span");
+    name.className = "ingame-player-name";
+    name.textContent = p.nickname;
+    if (p.id === net.playerId) {
+      name.title = `${p.nickname} (나)`;
+    }
+
+    const status = document.createElement("div");
+    status.className = "ingame-player-status";
+
+    const lives = p.dead ? 0 : Math.max(0, p.lives ?? 0);
+    const hearts = Array.from({ length: 3 })
+      .map((_, i) => `<span class="player-heart ${i < lives ? "alive" : "lost"}">❤</span>`)
+      .join("");
+
+    if (p.dead) {
+      status.innerHTML = `<span class="player-hearts">${hearts}</span> <span class="player-down-badge">DOWN</span>`;
+    } else {
+      status.innerHTML = `<span class="player-hearts">${hearts}</span>`;
+    }
+
+    row.append(dot, name, status);
+    list.appendChild(row);
+  }
+}
+
 function renderSongSlot(song, isHost) {
   const div = document.createElement("div");
   div.className = "song-slot";
+  const isDefault = Boolean(song.isDefault);
   const status = song.verified
-    ? `<span class="status">확인됨: ${song.title}</span>`
-    : `<span class="status unset">아직 노래가 설정되지 않았습니다</span>`;
-  div.innerHTML = `<h3>스테이지 ${song.slot}</h3>${status}`;
+    ? isDefault
+      ? `<span class="status" style="color: #06b6d4; font-weight: 700; background: rgba(6, 182, 212, 0.15); padding: 2px 8px; border-radius: 6px; border: 1px solid rgba(6, 182, 212, 0.4); font-size: 12px;">기본곡</span>`
+      : `<span class="status" style="font-size: 13px;">확인됨: ${escapeHtml(song.title)}</span>`
+    : `<span class="status unset" style="font-size: 12px;">아직 노래가 설정되지 않았습니다</span>`;
+
+  div.innerHTML = `
+    <div class="song-slot-header">
+      <div class="song-slot-title-group">
+        <h3>스테이지 ${song.slot}</h3>
+        ${status}
+      </div>
+    </div>
+  `;
 
   if (song.verified && song.fullDurationSec) {
     const durRow = document.createElement("div");
     durRow.className = "duration-row";
     const label = document.createElement("span");
-    label.textContent = `재생 길이: ${song.durationSec}초`;
-    durRow.appendChild(label);
-    if (isHost) {
-      const slider = document.createElement("input");
-      slider.type = "range";
-      slider.min = "15";
-      slider.max = String(song.fullDurationSec);
-      slider.value = String(song.durationSec);
-      slider.addEventListener("input", () => {
-        label.textContent = `재생 길이: ${slider.value}초`;
-      });
-      slider.addEventListener("change", () => {
-        net.send("set_song", { slot: song.slot, song: { ...song, durationSec: Number(slider.value) } });
-      });
-      durRow.appendChild(slider);
+
+    if (isDefault) {
+      // 기본곡은 전체 곡 길이로 고정 (슬라이더 제외, '전체 재생'으로만 표기)
+      label.textContent = "재생 길이: 전체 재생";
+      label.style.color = "#a5f3fc";
+      label.style.fontWeight = "600";
+      durRow.appendChild(label);
+    } else {
+      label.textContent = `재생 길이: ${song.durationSec}초`;
+      durRow.appendChild(label);
+      if (isHost) {
+        const slider = document.createElement("input");
+        slider.type = "range";
+        slider.min = "15";
+        slider.max = String(song.fullDurationSec);
+        slider.value = String(song.durationSec);
+        slider.addEventListener("input", () => {
+          label.textContent = `재생 길이: ${slider.value}초`;
+        });
+        slider.addEventListener("change", () => {
+          net.send("set_song", { slot: song.slot, song: { ...song, durationSec: Number(slider.value), isDefault: false } });
+        });
+        durRow.appendChild(slider);
+      }
     }
     div.appendChild(durRow);
   }
@@ -200,9 +312,20 @@ function renderSongSlot(song, isHost) {
   ytRow.appendChild(ytInput);
   const checkBtn = document.createElement("button");
   checkBtn.textContent = "확인";
-  checkBtn.onclick = () => handleYoutubeCheck(song.slot, ytInput.value.trim(), div);
+  checkBtn.onclick = () => handleYoutubeCheck(song.slot, ytInput.value.trim(), div, checkBtn);
   ytRow.appendChild(checkBtn);
   controls.appendChild(ytRow);
+
+  const defaultRow = document.createElement("div");
+  defaultRow.className = "row";
+  defaultRow.style.marginTop = "6px";
+  const defaultBtn = document.createElement("button");
+  defaultBtn.textContent = "기본곡 적용";
+  defaultBtn.className = "secondary";
+  defaultBtn.style.fontSize = "12px";
+  defaultBtn.onclick = () => net.send("reset_default_song", { roomId: roomState.id, playerId: net.playerId, slot: song.slot });
+  defaultRow.appendChild(defaultBtn);
+  controls.appendChild(defaultRow);
 
   div.appendChild(controls);
   return div;
@@ -234,56 +357,87 @@ async function handleUpload(slot, file) {
         fullDurationSec,
         durationSec: Math.min(fullDurationSec, DEFAULT_CAP_SEC),
         verified: true,
+        isDefault: false,
       },
     });
   });
 }
 
-async function handleYoutubeCheck(slot, url, slotDiv) {
+async function handleYoutubeCheck(slot, url, slotDiv, checkBtn) {
   if (!url) return;
-  const res = await fetch("/api/youtube-meta", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ url }),
-  });
-  const meta = await res.json();
-  if (meta.error) {
-    document.getElementById("lobby-error").textContent = meta.error;
-    return;
+  if (checkBtn) {
+    checkBtn.disabled = true;
+    checkBtn.textContent = "조회 중...";
   }
-  // 확인 절차: 제목/썸네일을 보여주고 맞는지 확인받는다.
-  const confirmBox = document.createElement("div");
-  confirmBox.innerHTML = `<p>이 노래가 맞나요? <b>${escapeHtml(meta.title)}</b> (${meta.durationSec}초)</p>`;
-  const yesBtn = document.createElement("button");
-  yesBtn.textContent = "맞습니다, 사용하기";
-  yesBtn.onclick = async () => {
-    yesBtn.disabled = true;
-    yesBtn.textContent = "오디오 추출 중...";
-    const dl = await fetch("/api/youtube-download", {
+  document.getElementById("lobby-error").textContent = "";
+
+  try {
+    const res = await fetch("/api/youtube-meta", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ url }),
-    }).then((r) => r.json());
-    if (dl.error) {
-      document.getElementById("lobby-error").textContent = dl.error;
+    });
+    const meta = await res.json();
+    if (meta.error) {
+      document.getElementById("lobby-error").textContent = meta.error;
       return;
     }
-    net.send("set_song", {
-      slot,
-      song: {
-        sourceType: "youtube",
-        title: dl.title,
-        filePath: dl.filePath,
-        publicUrl: dl.publicUrl,
-        fullDurationSec: dl.fullDurationSec,
-        durationSec: Math.min(dl.fullDurationSec, DEFAULT_CAP_SEC),
-        verified: true,
-      },
-    });
-    confirmBox.remove();
-  };
-  confirmBox.appendChild(yesBtn);
-  slotDiv.appendChild(confirmBox);
+
+    // 기존에 열려 있는 확인창이 있다면 제거
+    const oldConfirm = slotDiv.querySelector(".youtube-confirm-box");
+    if (oldConfirm) oldConfirm.remove();
+
+    // 확인 절차: 제목/썸네일을 보여주고 맞는지 확인받는다.
+    const confirmBox = document.createElement("div");
+    confirmBox.className = "youtube-confirm-box";
+    confirmBox.innerHTML = `<p style="margin-top: 8px;">이 노래가 맞나요? <b>${escapeHtml(meta.title)}</b> (${meta.durationSec}초)</p>`;
+    const yesBtn = document.createElement("button");
+    yesBtn.textContent = "맞습니다, 사용하기";
+    yesBtn.onclick = async () => {
+      yesBtn.disabled = true;
+      yesBtn.textContent = "오디오 추출 중...";
+      try {
+        const dl = await fetch("/api/youtube-download", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url }),
+        }).then((r) => r.json());
+        if (dl.error) {
+          document.getElementById("lobby-error").textContent = dl.error;
+          yesBtn.disabled = false;
+          yesBtn.textContent = "맞습니다, 사용하기";
+          return;
+        }
+        net.send("set_song", {
+          slot,
+          song: {
+            sourceType: "youtube",
+            title: dl.title,
+            filePath: dl.filePath,
+            publicUrl: dl.publicUrl,
+            fullDurationSec: dl.fullDurationSec,
+            durationSec: Math.min(dl.fullDurationSec, DEFAULT_CAP_SEC),
+            verified: true,
+            isDefault: false,
+          },
+        });
+        confirmBox.remove();
+      } catch (err) {
+        document.getElementById("lobby-error").textContent = "오디오 다운로드 실패: " + (err?.message || err);
+        yesBtn.disabled = false;
+        yesBtn.textContent = "맞습니다, 사용하기";
+      }
+    };
+    confirmBox.appendChild(yesBtn);
+    slotDiv.appendChild(confirmBox);
+  } catch (err) {
+    document.getElementById("lobby-error").textContent = "유튜브 정보 조회 실패: " + (err?.message || err);
+  } finally {
+    if (checkBtn) {
+      checkBtn.disabled = false;
+      checkBtn.textContent = "확인";
+    }
+  }
 }
 
 function escapeHtml(s) {
@@ -294,11 +448,15 @@ document.getElementById("btn-start").addEventListener("click", () => net.send("s
 
 // ---------- 게임 진행 ----------
 net.on("stage_start", (msg) => {
+  try { sessionStorage.removeItem("last_result_stats"); } catch (_) {}
+  lastResultStats = null;
   showScreen("game");
   if (!game) {
     game = new Game(net, document.getElementById("game-canvas"), document.getElementById("song-audio"), roomState);
+    setControlMode(currentControlMode); // UI 상태와 게임 객체의 조작 모드 동기화
   }
   game.roomState = roomState;
+  renderInGamePlayers();
   game.startStage(msg.stage, msg.songUrl, msg.timeline, msg.serverStartTime, msg.themeId);
 });
 
@@ -309,12 +467,29 @@ net.on("life_update", (msg) => {
   p.lives = msg.lives;
   p.dead = msg.dead;
   p.invulnerableUntil = msg.invulnerableUntil || 0;
+  if (msg.lastHitAt) {
+    p.lastHitAt = msg.lastHitAt;
+  } else if (msg.lives < prevLives) {
+    p.lastHitAt = Date.now();
+  }
   if (p.dead && !p.diedAt) p.diedAt = Date.now();
   if (!p.dead) p.diedAt = null;
+  renderInGamePlayers();
 
-  // 내 캐릭터의 목숨이 감소했을 때 화면 피격 FX 트리거
-  if (msg.id === net.playerId && msg.lives < prevLives && game) {
-    game.triggerHitFX();
+  // 내 캐릭터의 목숨이 변경되었을 때 처리
+  if (msg.id === net.playerId && game) {
+    if (msg.lastHitAt) game.localLastHitAt = msg.lastHitAt;
+    if (msg.lives < prevLives) {
+      game.triggerHitFX();
+    } else if (msg.lives > prevLives) {
+      game.triggerHealFX(); // 체력 회복 효과
+    }
+    if (msg.invulnerableDurationMs || msg.invulnerableUntil) {
+      const invulnDurSec = msg.invulnerableDurationMs
+        ? msg.invulnerableDurationMs / 1000
+        : Math.min(1.6, Math.max(0, (msg.invulnerableUntil - net.now()) / 1000));
+      game.localInvulnerableUntil = Math.max(game.localInvulnerableUntil, (performance.now() / 1000) + invulnDurSec);
+    }
   }
 });
 
@@ -324,13 +499,15 @@ net.on("player_revived", (msg) => {
   p.dead = false;
   p.lives = msg.lives;
   p.diedAt = null;
-  // 부활 직후 1.8초 무적 시간 반영
-  p.invulnerableUntil = msg.invulnerableUntil || (Date.now() + 1800);
+  // 부활 직후 1.8초 무적 시간 반영 (서버 동기화 시간 기준)
+  p.invulnerableUntil = msg.invulnerableUntil || (net.now() + 1800);
   if (msg.id === net.playerId && game) {
-    game.localInvulnerableUntil = (performance.now() / 1000) + 1.8;
+    const reviveDurSec = msg.invulnerableDurationMs ? msg.invulnerableDurationMs / 1000 : 1.8;
+    game.localInvulnerableUntil = Math.max(game.localInvulnerableUntil, (performance.now() / 1000) + reviveDurSec);
   }
   if (typeof msg.x === "number") p.x = msg.x;
   if (typeof msg.y === "number") p.y = msg.y;
+  renderInGamePlayers();
 });
 
 net.on("player_moved", (msg) => {
@@ -343,6 +520,7 @@ net.on("player_moved", (msg) => {
 net.on("player_removed", (msg) => {
   if (!roomState) return;
   delete roomState.players[msg.id];
+  renderInGamePlayers();
 });
 
 document.getElementById("volume-slider").addEventListener("input", (e) => {
@@ -359,19 +537,38 @@ net.on("stage_clear", (msg) => {
     { next: true, stats: msg.stats, nextStage: msg.nextStage }
   );
 });
-net.on("stage_failed", () => {
+net.on("stage_failed", (msg) => {
   if (game) game.stopStage();
-  showResult("STAGE FAILED", "전원이 쓰러졌습니다. 이 스테이지를 다시 시작할 수 있습니다.", { restart: true });
+  showResult("STAGE FAILED", "전원이 쓰러졌습니다. 이 스테이지를 다시 시작할 수 있습니다.", { restart: true, stats: msg?.stats });
 });
 net.on("game_clear", (msg) => {
   if (game) game.stopStage();
   showResult("ALL STAGES CLEAR!", "모든 스테이지를 클리어했습니다. 축하합니다!", { stats: msg.stats });
 });
 
+let lastResultStats = null;
+
 function showResult(title, desc, { next, restart, stats, nextStage } = {}) {
   showScreen("result");
   document.getElementById("result-title").textContent = title;
   document.getElementById("result-desc").textContent = desc;
+
+  // 통계 데이터 캐싱 및 복원
+  if (stats && Object.keys(stats).length > 0) {
+    lastResultStats = stats;
+    try {
+      sessionStorage.setItem("last_result_stats", JSON.stringify(stats));
+    } catch (_) {}
+  } else if (!stats) {
+    if (lastResultStats) {
+      stats = lastResultStats;
+    } else {
+      try {
+        const saved = sessionStorage.getItem("last_result_stats");
+        if (saved) stats = JSON.parse(saved);
+      } catch (_) {}
+    }
+  }
 
   // 통계 테이블 렌더링
   const statsContainer = document.getElementById("result-stats-container");
@@ -383,10 +580,13 @@ function showResult(title, desc, { next, restart, stats, nextStage } = {}) {
     table.innerHTML = `
       <thead>
         <tr>
-          <th>플레이어</th>
+          <th class="section-end">플레이어</th>
           <th>피격 횟수</th>
+          <th class="cum-header section-end">누적</th>
           <th>죽은 횟수</th>
+          <th class="cum-header section-end">누적</th>
           <th>살린 횟수</th>
+          <th class="cum-header">누적</th>
         </tr>
       </thead>
       <tbody>
@@ -394,10 +594,13 @@ function showResult(title, desc, { next, restart, stats, nextStage } = {}) {
         .map(
           (p) => `
           <tr>
-            <td><span class="dot" style="background:${p.color}"></span><b>${escapeHtml(p.nickname)}</b></td>
+            <td class="section-end"><span class="dot" style="background:${p.color}"></span><b>${escapeHtml(p.nickname)}</b></td>
             <td><span class="stat-badge hit">${p.hitCount}회</span></td>
+            <td class="section-end"><span class="stat-badge hit">${p.totalHitCount ?? p.hitCount}회</span></td>
             <td><span class="stat-badge death">${p.deathCount}회</span></td>
+            <td class="section-end"><span class="stat-badge death">${p.totalDeathCount ?? p.deathCount}회</span></td>
             <td><span class="stat-badge revive">${p.reviveCount}회</span></td>
+            <td><span class="stat-badge revive">${p.totalReviveCount ?? p.reviveCount}회</span></td>
           </tr>`
         )
         .join("")}
@@ -430,6 +633,8 @@ function showResult(title, desc, { next, restart, stats, nextStage } = {}) {
 document.getElementById("btn-next-stage").addEventListener("click", () => net.send("advance_stage"));
 document.getElementById("btn-restart").addEventListener("click", () => net.send("restart_stage"));
 document.getElementById("btn-giveup").addEventListener("click", () => {
+  try { sessionStorage.removeItem("last_result_stats"); } catch (_) {}
+  lastResultStats = null;
   net.send("give_up");
   showScreen("lobby");
 });
@@ -448,9 +653,56 @@ if (leaveLobbyBtn) leaveLobbyBtn.addEventListener("click", handleLeaveRoom);
 const leaveGameBtn = document.getElementById("btn-leave-game");
 if (leaveGameBtn) leaveGameBtn.addEventListener("click", handleLeaveRoom);
 
+// ---------- 조작 모드 전환 UI (좌우 슬라이드 단추) ----------
+let currentControlMode = "KEYBOARD";
+
+function setControlMode(mode) {
+  currentControlMode = mode;
+  const switchEl = document.getElementById("mode-sliding-switch");
+  const btnKeyboard = document.getElementById("tab-mode-keyboard");
+  const btnMouse = document.getElementById("tab-mode-mouse");
+
+  if (switchEl) switchEl.setAttribute("data-mode", mode);
+  if (btnKeyboard) {
+    btnKeyboard.classList.toggle("active", mode === "KEYBOARD");
+    btnKeyboard.setAttribute("aria-checked", String(mode === "KEYBOARD"));
+  }
+  if (btnMouse) {
+    btnMouse.classList.toggle("active", mode === "MOUSE");
+    btnMouse.setAttribute("aria-checked", String(mode === "MOUSE"));
+  }
+
+  document.getElementById("controls-keyboard")?.classList.toggle("hidden", mode !== "KEYBOARD");
+  document.getElementById("controls-mouse")?.classList.toggle("hidden", mode !== "MOUSE");
+
+  if (game) {
+    game.setControlMode(mode);
+  }
+}
+
+document.getElementById("tab-mode-keyboard")?.addEventListener("click", (e) => {
+  e.stopPropagation();
+  setControlMode("KEYBOARD");
+});
+
+document.getElementById("tab-mode-mouse")?.addEventListener("click", (e) => {
+  e.stopPropagation();
+  setControlMode("MOUSE");
+});
+
+document.getElementById("mode-sliding-switch")?.addEventListener("click", () => {
+  const nextMode = currentControlMode === "KEYBOARD" ? "MOUSE" : "KEYBOARD";
+  setControlMode(nextMode);
+});
+
 net.on("left_room", () => {
   // 서버가 left_room을 응답하면 새로고침 (handleLeaveRoom이 이미 reload하므로 fallback 용도)
   window.location.reload();
+});
+
+net.on("reconnect_failed", () => {
+  net.clearSession();
+  showScreen("landing");
 });
 
 // ---------- 새로고침 세션 자동 복원 (Reconnect) ----------

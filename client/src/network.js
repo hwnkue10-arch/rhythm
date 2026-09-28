@@ -5,9 +5,13 @@ export class Network {
     this.handlers = {};
     this.roomId = localStorage.getItem("rhythm_roomId") || null;
     this.playerId = localStorage.getItem("rhythm_playerId") || null;
+    this.serverTimeOffset = 0;
 
     this.ws.addEventListener("message", (ev) => {
       const msg = JSON.parse(ev.data);
+      if (typeof msg.serverTime === "number") {
+        this.serverTimeOffset = msg.serverTime - Date.now();
+      }
       if (msg.type === "joined") {
         this.roomId = msg.roomId;
         this.playerId = msg.playerId;
@@ -38,6 +42,10 @@ export class Network {
       if (this.ws.readyState === WebSocket.OPEN) return resolve();
       this.ws.addEventListener("open", () => resolve(), { once: true });
     });
+  }
+
+  now() {
+    return Date.now() + this.serverTimeOffset;
   }
 
   send(type, payload = {}) {

@@ -164,29 +164,41 @@ button.secondary:hover:not(:disabled) {
 }
 
 /* 노래 슬롯 카드 */
-.song-slots { display: flex; flex-direction: column; gap: 14px; margin: 20px 0; }
+.song-slots { display: flex; flex-direction: column; gap: 12px; margin: 16px 0; }
 .song-slot {
   background: #0f111a;
   border: 1px solid var(--border-color);
   border-radius: 10px;
-  padding: 16px;
+  padding: 12px 16px;
   transition: border-color 0.2s;
 }
 .song-slot:hover {
   border-color: rgba(255, 255, 255, 0.16);
 }
-.song-slot h3 {
-  margin: 0 0 6px;
-  font-size: 14px;
+.song-slot-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+.song-slot-title-group {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.song-slot-title-group h3 {
+  margin: 0;
+  font-size: 15px;
   font-weight: 700;
   color: var(--text-primary);
 }
 .song-slot .status { font-size: 13px; color: var(--success); }
 .song-slot .status.unset { color: var(--text-secondary); }
-.song-slot .row { margin-top: 10px; }
+.song-slot .row { margin-top: 8px; }
 .song-slot input[type="text"] { flex: 1; }
 .song-slot .duration-row {
-  margin-top: 12px;
+  margin-top: 8px;
   display: flex;
   align-items: center;
   gap: 12px;
@@ -202,6 +214,7 @@ button.secondary:hover:not(:disabled) {
   align-items: center;
   justify-content: center;
   padding: 10px;
+  overflow: hidden;
 }
 
 .game-layout {
@@ -211,19 +224,27 @@ button.secondary:hover:not(:disabled) {
   max-width: 98vw;
 }
 
-/* 좌측 조작법 패널 */
-.controls-panel {
+/* 좌측 사이드바: 조작법 박스와 플레이어 목록 박스를 독립 배치 */
+.game-sidebar {
   width: 220px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  flex-shrink: 0;
+}
+
+.side-box {
   background: var(--bg-card);
   border: 1px solid var(--border-color);
   border-radius: 14px;
-  padding: 18px;
+  padding: 16px;
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 12px;
 }
-.controls-panel h3 {
+
+.side-box h3 {
   margin: 0;
   font-size: 14px;
   color: var(--text-primary);
@@ -232,6 +253,67 @@ button.secondary:hover:not(:disabled) {
   border-bottom: 1px solid var(--border-color);
   padding-bottom: 8px;
 }
+
+/* ---------- 조작 모드 좌우 슬라이드 단추 (Switch Button) ---------- */
+.mode-switch-wrapper {
+  margin: 6px 0 14px 0;
+}
+.mode-sliding-switch {
+  position: relative;
+  display: flex;
+  background: #0d0f1a;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 20px;
+  padding: 3px;
+  box-shadow: inset 0 2px 6px rgba(0, 0, 0, 0.6);
+  user-select: none;
+  cursor: pointer;
+}
+.mode-sliding-knob {
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  left: 3px;
+  width: calc(50% - 3px);
+  background: linear-gradient(135deg, #00f0ff 0%, #2563eb 100%);
+  border-radius: 16px;
+  box-shadow: 0 0 14px rgba(0, 240, 255, 0.45);
+  transition: transform 0.28s cubic-bezier(0.34, 1.25, 0.64, 1), background 0.25s, box-shadow 0.25s;
+  pointer-events: none;
+  z-index: 1;
+}
+.mode-sliding-switch[data-mode="MOUSE"] .mode-sliding-knob {
+  transform: translateX(100%);
+  background: linear-gradient(135deg, #ff2a6d 0%, #a855f7 100%);
+  box-shadow: 0 0 14px rgba(255, 42, 109, 0.45);
+}
+.mode-tab-btn {
+  flex: 1;
+  position: relative;
+  z-index: 2;
+  background: transparent;
+  border: none;
+  border-radius: 16px;
+  padding: 6px 0;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.6px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  text-align: center;
+  transition: color 0.2s, text-shadow 0.2s;
+  box-shadow: none !important;
+}
+.mode-tab-btn:hover {
+  background: transparent;
+  color: #fff;
+  transform: none !important;
+}
+.mode-tab-btn.active {
+  color: #fff;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.7);
+}
+
 .control-item {
   display: flex;
   flex-direction: column;
@@ -282,22 +364,106 @@ button.secondary:hover:not(:disabled) {
   line-height: 1.4;
 }
 .leave-game-btn {
-  margin-top: 8px;
+  margin-top: 4px;
   padding: 8px 12px;
   font-size: 12px;
 }
+
+.players-box {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+}
+.ingame-player-list {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.ingame-player-row {
+  display: grid;
+  grid-template-columns: 10px 1fr auto;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 8px 10px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  font-size: 12px;
+  transition: background 0.2s;
+}
+.ingame-player-row.dead {
+  opacity: 0.65;
+  background: rgba(239, 68, 68, 0.08);
+  border-color: rgba(239, 68, 68, 0.3);
+}
+.ingame-player-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  box-shadow: 0 0 6px currentColor;
+}
+.ingame-player-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+.ingame-player-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+/* 플레이어 목록 내 하트 아이콘 */
+.player-hearts {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.player-heart {
+  font-size: 13px;
+  line-height: 1;
+  transition: transform 0.2s cubic-bezier(0.175, 0.885, 0.32, 1.275), filter 0.2s, color 0.2s;
+}
+.player-heart.alive {
+  color: #f43f5e;
+  filter: drop-shadow(0 0 5px rgba(244, 63, 94, 0.85));
+}
+.player-heart.lost {
+  color: #4a4e62;
+  filter: none;
+  opacity: 0.45;
+  transform: scale(0.85);
+}
+.player-down-badge {
+  display: inline-block;
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 800;
+  background: rgba(239, 68, 68, 0.2);
+  border: 1px solid #ef4444;
+  color: #f87171;
+  letter-spacing: 0.5px;
+  animation: blinkText 0.8s infinite alternate;
+}
+
 
 .game-main {
   display: flex;
   flex-direction: column;
   align-items: center;
+  gap: 8px;
+  width: min(1280px, max(360px, calc(98vw - 240px)));
 }
 
 .hud {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  width: min(1280px, 92vw);
+  width: 100%;
   padding: 8px 16px;
   color: #fff;
   font-size: 14px;
@@ -325,8 +491,20 @@ button.secondary:hover:not(:disabled) {
   font-weight: 500;
 }
 
-/* 시각적 목숨 하트 뱃지 */
+#hud-stage {
+  flex: 1;
+  display: flex;
+  align-items: center;
+}
+
+/* 시각적 목숨 하트 뱃지 (화면 정중앙 고정) */
 #hud-lives {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.hud-hearts {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -347,11 +525,83 @@ button.secondary:hover:not(:disabled) {
   transform: scale(0.85);
   opacity: 0.5;
 }
+.heart-icon.recovering {
+  position: relative;
+  display: inline-block;
+  font-size: 22px;
+  line-height: 1;
+}
+.heart-icon.recovering .heart-bg {
+  color: #4a4e62;
+  filter: none;
+  opacity: 0.5;
+  display: inline-block;
+}
+.heart-icon.recovering .heart-fill {
+  position: absolute;
+  top: 0;
+  left: 0;
+  color: #f43f5e;
+  filter: drop-shadow(0 0 8px rgba(244, 63, 94, 0.95));
+  display: inline-block;
+  pointer-events: none;
+}
+
+/* 자동 회복 10초 카운트다운 타이머 뱃지 */
+.heal-timer-container {
+  position: absolute;
+  left: calc(100% + 12px);
+  top: 50%;
+  transform: translateY(-50%);
+  white-space: nowrap;
+  pointer-events: none;
+}
+.heal-timer-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-weight: 700;
+  color: #34d399;
+  background: rgba(16, 185, 129, 0.16);
+  border: 1px solid rgba(52, 211, 153, 0.45);
+  padding: 3px 9px;
+  border-radius: 12px;
+  letter-spacing: 0.3px;
+  text-shadow: 0 0 6px rgba(52, 211, 153, 0.7);
+  box-shadow: 0 0 10px rgba(16, 185, 129, 0.15);
+  animation: healPulse 2s infinite ease-in-out;
+}
+@keyframes healPulse {
+  0%, 100% {
+    transform: scale(1);
+    box-shadow: 0 0 8px rgba(16, 185, 129, 0.15);
+  }
+  50% {
+    transform: scale(1.04);
+    box-shadow: 0 0 14px rgba(52, 211, 153, 0.35);
+  }
+}
+
+/* 부활 대기 문구: 하트 위치에 레이아웃 영향을 주지 않도록 우측 절대 위치로 배치 */
+.revive-wait-container {
+  position: absolute;
+  left: calc(100% + 12px);
+  top: 50%;
+  transform: translateY(-50%);
+  white-space: nowrap;
+  pointer-events: none;
+}
 .revive-wait-text {
-  font-size: 13px;
+  display: inline-block;
+  font-size: 12px;
   color: #fbbf24;
-  margin-left: 6px;
-  font-weight: bold;
+  background: rgba(245, 158, 11, 0.15);
+  border: 1px solid rgba(245, 158, 11, 0.45);
+  padding: 3px 10px;
+  border-radius: 12px;
+  font-weight: 700;
+  letter-spacing: 0.2px;
   animation: blinkText 0.8s infinite alternate;
 }
 
@@ -369,7 +619,13 @@ button.secondary:hover:not(:disabled) {
   to { opacity: 1; }
 }
 
-.volume-control { display: flex; align-items: center; gap: 8px; width: 170px; }
+.volume-control {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
 .volume-control span { font-size: 16px; }
 input[type="range"] {
   -webkit-appearance: none;
@@ -393,8 +649,46 @@ input[type="range"]::-webkit-slider-thumb {
   border: 1px solid rgba(255, 255, 255, 0.15);
   border-radius: 6px;
   box-shadow: 0 10px 40px rgba(0, 0, 0, 0.7);
-  max-width: 96vw;
-  max-height: 82vh;
+  width: 100%;
+  height: auto;
+  max-width: 100%;
+  max-height: calc(100vh - 148px);
+}
+
+.song-progress {
+  width: 100%;
+  height: 34px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.song-progress-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  min-height: 15px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.2px;
+}
+.song-progress-track {
+  position: relative;
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+.song-progress-fill {
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #06b6d4, #3b82f6, #ff2a6d);
+  box-shadow: 0 0 14px rgba(6, 182, 212, 0.45);
+  transform: scaleX(0);
+  transform-origin: left center;
+  transition: transform 0.08s linear;
 }
 
 /* ---------- 결과창 (STAGE CLEAR / FAILED) ---------- */
@@ -427,8 +721,16 @@ input[type="range"]::-webkit-slider-thumb {
   border: 1px solid var(--border-color);
 }
 .stats-table th, .stats-table td {
-  padding: 14px 18px;
+  padding: 12px 14px;
   font-size: 14px;
+  text-align: center;
+}
+.stats-table th:first-child, .stats-table td:first-child {
+  text-align: left;
+  padding-left: 18px;
+}
+.stats-table .section-end {
+  border-right: 1px solid rgba(255, 255, 255, 0.14);
 }
 .stats-table th {
   background: #12141e;
@@ -437,6 +739,10 @@ input[type="range"]::-webkit-slider-thumb {
   text-transform: uppercase;
   font-size: 12px;
   letter-spacing: 0.5px;
+}
+.stats-table th.cum-header {
+  color: #7d8597;
+  font-size: 11px;
 }
 .stats-table tr {
   border-bottom: 1px solid var(--border-color);
@@ -475,6 +781,17 @@ input[type="range"]::-webkit-slider-thumb {
 .stat-badge.revive {
   background: rgba(16, 185, 129, 0.15);
   color: #34d399;
+}
+.stat-badge.total {
+  background: rgba(255, 255, 255, 0.08);
+  color: #a0aec0;
+  font-size: 11px;
+  font-weight: 500;
+  margin-left: 6px;
+  padding: 2px 7px;
+  border-radius: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  vertical-align: middle;
 }
 
 .result-actions {
